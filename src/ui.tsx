@@ -86,6 +86,9 @@ export function RichText({ text, class: cls = 'text' }: { text: string; class?: 
 export const isImg = (u: string) => /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(u) || /imagedelivery\.net|i\.imgur\.com/.test(u)
 export const isVid = (u: string) => /\.(m3u8|mp4|webm|mov)(\?|$)/i.test(u)
 
+// Farcaster's streams get a first-frame poster from our server
+const poster = (src?: string) => (src && /^https:\/\/stream\.farcaster\.xyz\//.test(src) ? `/api/poster?url=${encodeURIComponent(src)}` : undefined)
+
 // HLS plays natively in Safari and Chrome; Firefox-based browsers get hls.js, loaded on first play
 export function Video({ src }: { src: string }) {
   const ref = useRef<HTMLVideoElement>(null)
@@ -103,7 +106,7 @@ export function Video({ src }: { src: string }) {
   }
   return (
     <div class="vid" onClick={stop}>
-      <video ref={ref} src={hls ? undefined : src} poster={/^https:\/\/stream\.farcaster\.xyz\//.test(src) ? `/api/poster?url=${encodeURIComponent(src)}` : undefined} controls={ready} preload="metadata" playsInline />
+      <video ref={ref} src={hls ? undefined : src} poster={poster(src)} controls={ready} preload="metadata" playsInline />
       {!ready && <button class="play" aria-label="Play video" onClick={start}><Icon d={P.play} fill size={26} /></button>}
     </div>
   )
@@ -231,13 +234,15 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
   if (c === null) return <div class="quote muted">This cast is unavailable.</div>
   if (!c) return <div class="quote skeleton" />
   const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
-  const img = urls.find(isImg)
+  const img = urls.find(isImg) || poster(urls.find(isVid))
+  const text = castText(c).trim()
   return (
     <a class="quote" href={`/c/${c.hash}`} onClick={stop}>
       <div class="meta"><Avatar u={c.author} size={18} link={false} /><b>{c.author.display_name || handle(c.author)}</b><span>@{handle(c.author)} · {ago(c.timestamp)}</span></div>
-      <div class="qbody">
-        <RichText text={castText(c)} class="text clamp" />
-        {img && <img class="qimg" src={img} alt="" loading="lazy" referrerpolicy="no-referrer" />}
+      {/* text gets a thumbnail beside it; a cast that is only media shows it at size */}
+      <div class={`qbody${text ? '' : ' bare'}`}>
+        {text && <RichText text={text} class="text clamp" />}
+        {img && <img class="qimg" src={img} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
       </div>
     </a>
   )
@@ -246,13 +251,16 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
 function Embeds({ c }: { c: Cast }) {
   const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
   const links = urls.filter((u) => !isImg(u) && !isVid(u))
-  return (
+  const quotes = c.embeds.filter((e) => /^(0x)?[0-9a-f]{40}$/i.test(e.cast_id?.hash || ''))
+  const all = (
     <>
       <Media urls={urls} />
       {links.map((u) => <LinkCard u={u} />)}
-      {c.embeds.filter((e) => /^(0x)?[0-9a-f]{40}$/i.test(e.cast_id?.hash || '')).map((e) => <QuoteCard hash={e.cast_id!.hash} />)}
+      {quotes.map((e) => <QuoteCard hash={e.cast_id!.hash} />)}
     </>
   )
+  // several embeds (the images count as one) sit side by side and scroll, instead of stacking into a tall cast
+  return +urls.some(isImg) + urls.filter(isVid).length + links.length + quotes.length > 1 ? <div class="strip">{all}</div> : all
 }
 
 function RecastMenu({ c, on, toggle, close }: { c: Cast; on: boolean; toggle: () => void; close: () => void }) {

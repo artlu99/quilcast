@@ -5,10 +5,10 @@ import { Composer } from './compose.tsx'
 import { ago, Avatar, CastCard, handle, Icon, Lightbox, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
 
-function Join() {
-  const [C, setC] = useState<(() => any) | null>(null)
+function Join({ step }: { step?: string }) {
+  const [C, setC] = useState<((p: { step?: string }) => any) | null>(null)
   useEffect(() => void import('./join.tsx').then((m) => setC(() => m.Join)), [])
-  return C ? <C /> : <div class="spinner" />
+  return C ? <C step={step} /> : <div class="spinner" />
 }
 
 // --- bits ---
@@ -32,7 +32,8 @@ const Header = ({ title, back: showBack = true, children }: { title?: ComponentC
 
 const Tabs = <T extends string>({ tabs, value, set }: { tabs: [T, string][]; value: T; set: (t: T) => void }) => (
   <nav class="tabs" role="tablist">
-    {tabs.map(([k, label]) => <button role="tab" aria-selected={value === k} class={value === k ? 'on' : ''} onClick={() => set(k)}>{label}</button>)}
+    {/* a list under tabs in the sticky header starts at its top, not wherever the previous one was scrolled to */}
+    {tabs.map(([k, label]) => <button role="tab" aria-selected={value === k} class={value === k ? 'on' : ''} onClick={(e) => (e.currentTarget.closest('.phead') && scrollTo(0, 0), set(k))}>{label}</button>)}
   </nav>
 )
 
@@ -671,7 +672,7 @@ function App() {
         : r0 === 'search' ? <Search />
           : r0 === 'notifications' ? <Notifications />
           : r0 === 'settings' ? <Settings />
-            : r0 === 'join' ? <><Header /><Join /></>
+            : r0 === 'join' ? <><Header /><Join step={r1} /></>
               : <Home />
   const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell] as [string, string, string]] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
   const href = (k: string) => (k === 'u' ? userPath(me!) : `/${k}`)

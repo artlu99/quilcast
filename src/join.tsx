@@ -21,25 +21,25 @@ const Steps = ({ steps, at }: { steps: string[]; at: number }) => (
   <ol class="steps">{steps.map((s, i) => <li class={i < at ? 'done' : i === at ? 'now' : ''}>{s}</li>)}</ol>
 )
 
-export function Join() {
-  const [mode, setMode] = useState<'pick' | 'create' | 'signin' | 'wallet'>('pick')
+// each step is its own path, so the header's back arrow and the browser's both return to the choices
+export function Join({ step }: { step?: string }) {
   if (account && !account.done) return <Setup />
-  if (mode === 'create') return <Create back={() => setMode('pick')} />
-  if (mode === 'signin') return <SignIn back={() => setMode('pick')} />
-  if (mode === 'wallet') return <WalletIn back={() => setMode('pick')} />
+  if (step === 'create') return <Create />
+  if (step === 'signin') return <SignIn />
+  if (step === 'wallet') return <WalletIn />
   return (
     <div class="join">
       <h1>{account ? 'Add an account' : 'Join Farcaster on Hypersnap'}</h1>
       <p class="lede">Quilcast is a small, open client that reads from and posts to the Hypersnap network that Quilibrium runs. There is no server in between, and your keys stay in this browser.</p>
-      <button class="choice" onClick={() => setMode('create')}>
+      <button class="choice" onClick={() => go('/join/create')}>
         <b>Create a new account</b>
         <span>Pick a username and register it on Optimism for about twenty cents of ETH.</span>
       </button>
-      <button class="choice" onClick={() => setMode('signin')}>
+      <button class="choice" onClick={() => go('/join/signin')}>
         <b>I already have an account</b>
         <span>Sign in with the recovery phrase from Warpcast, Quorum or any other Farcaster app.</span>
       </button>
-      <button class="choice" onClick={() => setMode('wallet')}>
+      <button class="choice" onClick={() => go('/join/wallet')}>
         <b>Use a wallet</b>
         <span>Connect MetaMask, Rabby or another wallet that owns a Farcaster account, or create one paid from it. The wallet keeps its keys and you approve each signature.</span>
       </button>
@@ -47,7 +47,7 @@ export function Join() {
   )
 }
 
-function Create({ back, wallet }: { back: () => void; wallet?: string }) {
+function Create({ wallet }: { wallet?: string }) {
   const [name, setName] = useState('')
   const [display, setDisplay] = useState('')
   const [state, setState] = useState<'' | 'checking' | 'free' | 'taken' | 'bad'>('')
@@ -61,7 +61,6 @@ function Create({ back, wallet }: { back: () => void; wallet?: string }) {
   const go = () => setAccount({ phrase: wallet ? '' : generateMnemonic(wordlist), wallet, username: name, display: display.trim() || name })
   return (
     <div class="join">
-      <button class="link-btn" onClick={back}>← Back</button>
       <h1>Pick your name</h1>
       {wallet && <p class="lede">No Farcaster account belongs to {short(wallet)} yet. Pick a name and the wallet pays the registration on Optimism.</p>}
       <label>Username
@@ -79,7 +78,7 @@ function Create({ back, wallet }: { back: () => void; wallet?: string }) {
 const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
 
 const WALLET_IN = ['Connecting your wallet', 'Finding your Farcaster account', 'Two signatures in your wallet add a signing key for this browser', 'Loading your profile']
-function WalletIn({ back }: { back: () => void }) {
+function WalletIn() {
   const [err, setErr] = useState('')
   const [at, setAt] = useState(-1)
   const [none, setNone] = useState('')
@@ -102,11 +101,10 @@ function WalletIn({ back }: { back: () => void }) {
     }
   }
   // a wallet without a Farcaster account can register one
-  if (none) return <Create back={() => setNone('')} wallet={none} />
+  if (none) return <Create wallet={none} />
   const busy = at >= 0
   return (
     <div class="join">
-      <button class="link-btn" onClick={back}>← Back</button>
       <h1>Use a wallet</h1>
       <p class="lede">Connect the wallet that owns your Farcaster account. Quilcast never sees its keys: the wallet approves a signing key for this browser, and later asks again only to renew that key, claim a username or sign uploads.</p>
       {err && <p class="warn">{err}</p>}
@@ -117,7 +115,7 @@ function WalletIn({ back }: { back: () => void }) {
 }
 
 const SIGN_IN = ['Reading your recovery phrase', 'Finding your Farcaster account', 'Adding a signing key for this browser', 'Loading your profile']
-function SignIn({ back }: { back: () => void }) {
+function SignIn() {
   const [phrase, setPhrase] = useState('')
   const [err, setErr] = useState('')
   const [at, setAt] = useState(-1)
@@ -144,7 +142,6 @@ function SignIn({ back }: { back: () => void }) {
   const busy = at >= 0
   return (
     <div class="join">
-      <button class="link-btn" onClick={back}>← Back</button>
       <h1>Sign in</h1>
       <p class="lede">Enter the 12 or 24 word recovery phrase of your Farcaster account. Quilcast keeps it in this browser and uses it to add a signing key for this device.</p>
       <textarea rows={4} value={phrase} disabled={busy} onInput={(e) => setPhrase(e.currentTarget.value)} placeholder="apple banana cherry …" autocapitalize="none" spellcheck={false} />

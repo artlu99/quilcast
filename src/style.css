@@ -255,7 +255,12 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .qbody .text { flex: 1; min-width: 0; }
 .clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .qimg { width: 76px; height: 76px; object-fit: cover; border-radius: 10px; margin-top: 4px; flex: none; }
+.qbody.bare { display: block; }
+.bare .qimg { display: block; width: auto; height: auto; max-width: 100%; max-height: 300px; margin-top: 8px; }
 .skeleton { height: 64px; background: var(--soft); border-color: transparent; }
+.strip { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: thin; }
+.strip > * { flex: none; width: 260px; max-width: 80%; margin-top: 0; scroll-snap-align: start; }
+.strip .imgs.n1 img { width: 100%; max-height: 260px; min-width: 0; object-fit: cover; }
 
 /* menus */
 .wrap-menu { position: relative; display: inline-flex; }
