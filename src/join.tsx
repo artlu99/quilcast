@@ -7,7 +7,7 @@ import { address, fnameProof } from './fc.ts'
 import { custodyKey, ensureSigner, setUserData } from './write.ts'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-const eth = (wei: bigint) => (Number(wei) / 1e18).toFixed(6).replace(/0+$/, '')
+const eth = (wei: bigint) => (Number(wei) / 1e18).toFixed(6).replace(/\.?0+$/, '')
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,15}$/
 
 const finish = async (a: Account) => {
@@ -57,7 +57,7 @@ function Create({ back }: { back: () => void }) {
       <h1>Pick your name</h1>
       <label>Username
         <div class="prefix"><span>@</span><input value={name} onInput={(e) => setName(e.currentTarget.value.toLowerCase().trim())} placeholder="yourname" maxLength={16} autoFocus autocapitalize="none" spellcheck={false} /></div>
-        <small class={state === 'free' ? 'ok' : state ? 'warn' : ''}>
+        <small class={state === 'free' ? 'ok' : state === 'taken' || state === 'bad' ? 'warn' : ''}>
           {{ '': 'Lowercase letters, numbers and dashes, up to 16 characters.', checking: 'Checking…', free: `@${name} is available.`, taken: `@${name} is already taken.`, bad: 'Use lowercase letters, numbers and dashes, starting with a letter or number.' }[state]}
         </small>
       </label>

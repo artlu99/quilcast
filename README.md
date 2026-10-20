@@ -34,3 +34,7 @@ npm run build   # → dist/, deployed to GitHub Pages on every push to main
 ```
 
 Your recovery phrase is stored unencrypted in this browser's `localStorage`. Anyone with access to your browser profile can take over the account, so treat it like a hot wallet.
+
+## Share previews
+
+`og/` is the one optional server: `s.quilcast.com/c/<hash>` serves a page with Open Graph tags plus a rendered 1200×630 card of the cast (resvg, Inter and Noto Emoji), then redirects to the app. It runs on Easypanel from `og/Dockerfile`.

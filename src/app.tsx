@@ -130,7 +130,7 @@ export function CastCard({ c, big, inThread, onReply }: { c: Cast; big?: boolean
     w().then((m) => m.react(type, on, c)).catch((e) => (set(!on), on ? bag.delete(c.hash) : bag.add(c.hash), toast(e.message)))
   }
   const share = () => {
-    const url = `${location.origin}/#/c/${c.hash}`
+    const url = `https://s.quilcast.com/c/${c.hash}`
     navigator.share ? navigator.share({ url }).catch(() => {}) : navigator.clipboard.writeText(url).then(() => toast('Link copied'))
   }
   if (gone) return null
