@@ -389,6 +389,8 @@ small.warn { color: var(--warn); }
 .embed-preview .lc-img, .embed-preview .imgs img, .embed-preview .tw-video img { max-height: 180px; }
 .embed-preview .linkcard.big { flex-direction: row; }
 .embed-preview .linkcard.big .lc-img { width: 140px; aspect-ratio: 1.91 / 1; height: auto; border-bottom: 0; border-right: 1px solid var(--line); flex: none; }
+.part-x { color: var(--muted); width: 28px; height: 28px; margin-top: 4px; }
+.part-x:hover { color: var(--ink); }
 .add-part { color: var(--accent); border: 1px solid var(--line) !important; width: 32px !important; height: 32px !important; }
 .editor .avatar { margin-left: -4px; }
 .sheet textarea { border: 0; box-shadow: none; padding: 6px 0; font-size: 18px; resize: none; background: none; min-height: 36px; max-height: 50vh; }

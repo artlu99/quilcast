@@ -48,9 +48,9 @@ const linksIn = (text: string) => [...new Set((text.match(LINK_RE) || []).map(to
 const fmtLeft = (s?: number) => (s === undefined || !isFinite(s) ? '' : s < 60 ? ` · ${Math.max(1, Math.round(s))}s left` : ` · ${Math.round(s / 60)} min left`)
 
 /** One post of a thread: text with @mention autocomplete, its attachments and the links it will embed. */
-function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, placeholder }: {
+function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, placeholder, remove }: {
   part: Part; set: (p: Partial<Part>) => void; first: boolean; last: boolean; quote?: Cast
-  focus: boolean; onFocus: () => void; attach: (files: FileList | null) => void; placeholder: string
+  focus: boolean; onFocus: () => void; attach: (files: FileList | null) => void; placeholder: string; remove?: () => void
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
   const [tok, setTok] = useState<{ start: number; q: string } | null>(null)
@@ -85,6 +85,8 @@ function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, pla
     requestAnimationFrame(() => (el.focus(), el.setSelectionRange(caret, caret)))
   }
   const keys = (e: KeyboardEvent) => {
+    // backspace in an empty post drops it, like X
+    if (e.key === 'Backspace' && remove && !part.text && !part.files.length) return e.preventDefault(), remove()
     if (!sug.length || !tok) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') setSel((sel + (e.key === 'ArrowDown' ? 1 : sug.length - 1)) % sug.length)
     else if (e.key === 'Enter' || e.key === 'Tab') mention(sug[sel])
@@ -104,6 +106,7 @@ function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, pla
           onInput={(e) => (set({ text: e.currentTarget.value }), findToken(e.currentTarget))}
           onKeyDown={keys} onClick={(e) => findToken(e.currentTarget)} onFocus={onFocus}
           onPaste={(e) => e.clipboardData?.files.length && (e.preventDefault(), attach(e.clipboardData.files))} />
+        {remove && <button class="icon-btn part-x" aria-label="Remove this post" onClick={(e) => (e.stopPropagation(), remove())}><Icon d={P.x} size={16} /></button>}
       </div>
       {tok && sug.length > 0 && (
         <div class="mentions" role="listbox">
@@ -211,6 +214,7 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
           {parts.map((p, i) => (
             <PartEditor key={p.id} part={p} set={(x) => update(p.id, x)} first={i === 0} last={i === parts.length - 1} quote={quote} focus={i === active}
               onFocus={() => setActive(i)} attach={attach}
+              remove={i > 0 ? () => (setParts((ps) => ps.filter((x) => x.id !== p.id)), setActive(i - 1)) : undefined}
               placeholder={i > 0 ? 'Add another post' : parent ? `Reply to @${handle(parent.author)}` : quote ? 'Add a comment' : "What's happening?"} />
           ))}
         </div>
