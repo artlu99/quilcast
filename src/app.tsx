@@ -151,10 +151,17 @@ const Feed = ({ load, k, empty, keep }: { load: (cursor?: string) => Promise<Pag
 
 function Home() {
   const [tab, setTab] = useState<'following' | 'trending'>(account?.done ? 'following' : 'trending')
+  // tapping the current tab, or Home while already home, reloads the feed from the top
+  const [round, setRound] = useState(0)
+  const reload = () => (scrollTo(0, 0), setRound((r) => r + 1))
+  useEffect(() => {
+    addEventListener('refresh', reload)
+    return () => removeEventListener('refresh', reload)
+  }, [])
   return (
     <>
       <Header title="Home" back={false}>
-        {account?.done && <Tabs tabs={[['following', 'Following'], ['trending', 'Trending']]} value={tab} set={setTab} />}
+        {account?.done && <Tabs tabs={[['following', 'Following'], ['trending', 'Trending']]} value={tab} set={(t) => (t === tab ? reload() : setTab(t))} />}
       </Header>
       {!account?.done && (
         <div class="banner">
@@ -162,7 +169,7 @@ function Home() {
           <a class="btn small" href="/join">Join</a>
         </div>
       )}
-      <Feed k={tab} empty="Follow a few people and their casts will show up here." keep={(c) => !c.parent_hash}
+      <Feed k={`${tab}:${round}`} empty="Follow a few people and their casts will show up here." keep={(c) => !c.parent_hash}
         load={(cursor) => (tab === 'following' ? get('/v2/farcaster/feed/following', { fid: account!.fid, limit: 25, cursor }) : get('/v2/farcaster/feed/trending', { limit: 25, cursor }))} />
     </>
   )
@@ -512,7 +519,7 @@ addEventListener('click', (e) => {
   const a = (e.target as Element).closest?.('a')
   if (!a || a.target || a.origin !== location.origin || e.metaKey || e.ctrlKey || e.shiftKey || e.button || e.defaultPrevented) return
   e.preventDefault()
-  a.pathname + a.search !== location.pathname + location.search && go(a.pathname + a.search)
+  a.pathname + a.search !== location.pathname + location.search ? go(a.pathname + a.search) : dispatchEvent(new Event('refresh'))
 })
 
 const useRoute = () => {
