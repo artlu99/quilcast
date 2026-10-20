@@ -27,3 +27,10 @@ test('mentions strip names and record utf-8 byte offsets', async () => {
   assert.deepEqual(m.mentions, [1, 2])
   assert.deepEqual(m.positions, [7, 12])
 })
+
+test('castText puts mentions back at their byte offsets', async () => {
+  ;(globalThis as any).localStorage = { getItem: () => null, setItem() {}, removeItem() {} }
+  const { castText } = await import('./api.ts')
+  const c = { text: 'hé  and ', mentioned_profiles: [{ fid: 1, username: 'a' }, { fid: 2, username: 'b.eth' }], mentioned_profiles_ranges: [{ start: 4, end: 4 }, { start: 9, end: 9 }] } as any
+  assert.equal(castText(c), 'hé @a and @b.eth')
+})

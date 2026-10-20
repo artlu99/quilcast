@@ -80,6 +80,29 @@ export type Cast = {
   hash: string; text: string; timestamp: string; author: User; parent_hash?: string | null; parent_url?: string | null; parent_author?: { fid: number | null }
   embeds: { url?: string; cast_id?: { fid: number; hash: string } }[]
   reactions: { likes_count: number; recasts_count: number }; replies: { count: number }; direct_replies?: Cast[]
+  mentioned_profiles?: User[]; mentioned_profiles_ranges?: { start: number; end: number }[]
+}
+
+/** Hypersnap leaves mentions out of `text` and gives UTF-8 byte offsets; put "@name" back in. */
+export function castText(c: Cast) {
+  const ranges = c.mentioned_profiles_ranges || []
+  if (!ranges.some((r) => r.start === r.end)) return c.text
+  let bytes = new TextEncoder().encode(c.text)
+  const enc = new TextEncoder()
+  // insert from the end so earlier offsets stay valid
+  ranges
+    .map((r, i) => ({ ...r, u: c.mentioned_profiles?.[i] }))
+    .filter((r) => r.start === r.end && r.u?.username)
+    .sort((a, b) => b.start - a.start)
+    .forEach((r) => {
+      const ins = enc.encode('@' + r.u!.username)
+      const out = new Uint8Array(bytes.length + ins.length)
+      out.set(bytes.subarray(0, r.start))
+      out.set(ins, r.start)
+      out.set(bytes.subarray(r.start), r.start + ins.length)
+      bytes = out
+    })
+  return new TextDecoder().decode(bytes)
 }
 
 // authors we've seen, so replies can say who they reply to

@@ -2,7 +2,7 @@ import { render, type ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { account, accounts, back, get, go, hydrateParents, isFollowing, loadMine, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
-import { ago, Avatar, CastCard, handle, Icon, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, Avatar, CastCard, handle, Icon, Lightbox, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
 
 function Join() {
@@ -537,7 +537,9 @@ function App() {
   const [compose, setCompose] = useState<Parameters<typeof shell.compose>[0] | null>(null)
   const [r0, r1] = useRoute()
   const unread = useUnread()
+  const [viewer, setViewer] = useState<{ urls: string[]; index: number } | null>(null)
   shell.compose = (o = {}) => setCompose(o)
+  shell.view = (urls, index) => setViewer({ urls, index })
   useEffect(() => {
     const f = () => force((x) => x + 1)
     addEventListener('account', f)
@@ -582,6 +584,7 @@ function App() {
       </nav>
       {me && r0 !== 'join' && r0 !== 'settings' && <button class="fab" aria-label="New cast" onClick={() => setCompose({})}><Icon d={P.pen} size={22} /></button>}
       {compose && <Composer {...compose} onClose={() => setCompose(null)} />}
+      {viewer && <Lightbox {...viewer} close={() => setViewer(null)} />}
       <Toast />
     </div>
   )

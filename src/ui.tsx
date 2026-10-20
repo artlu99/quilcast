@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, get, go, mine, users, type Cast, type User } from './api.ts'
+import { account, castText, get, go, mine, users, type Cast, type User } from './api.ts'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -8,6 +8,7 @@ export const w = () => import('./write.ts')
 export const shell = {
   toast: (_: string) => {},
   compose: (_: { parent?: Cast; quote?: Cast; channel?: string } = {}) => {},
+  view: (_urls: string[], _index: number) => {},
 }
 export const toast = (m: string) => shell.toast(m)
 export const requireAccount = () => (account?.done ? true : (go('/join'), false))
@@ -107,15 +108,54 @@ export function Video({ src }: { src: string }) {
 
 export function Media({ urls }: { urls: string[] }) {
   const imgs = urls.filter(isImg)
+  const shown = imgs.slice(0, 4)
   return (
     <>
       {imgs.length > 0 && (
-        <div class={`imgs n${Math.min(imgs.length, 4)}`}>
-          {imgs.slice(0, 4).map((u) => <a href={u} target="_blank" rel="noopener noreferrer" onClick={stop}><img src={u} alt="" loading="lazy" referrerpolicy="no-referrer" /></a>)}
+        <div class={`imgs n${shown.length}`} onClick={stop}>
+          {shown.map((u, i) => (
+            <button class="img" aria-label={`Open image ${i + 1} of ${imgs.length}`} onClick={() => shell.view(imgs, i)}>
+              <img src={u} alt="" loading="lazy" referrerpolicy="no-referrer" />
+              {i === 3 && imgs.length > 4 && <span class="more-imgs">+{imgs.length - 4}</span>}
+            </button>
+          ))}
         </div>
       )}
       {urls.filter(isVid).map((u) => <Video src={u} />)}
     </>
+  )
+}
+
+/** Full-screen image viewer: arrows, keyboard and swipe move between images. */
+export function Lightbox({ urls, index, close }: { urls: string[]; index: number; close: () => void }) {
+  const [i, setI] = useState(index)
+  const many = urls.length > 1
+  const step = (d: number) => many && setI((x) => (x + d + urls.length) % urls.length)
+  const touch = useRef(0)
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => (e.key === 'Escape' ? close() : e.key === 'ArrowRight' ? step(1) : e.key === 'ArrowLeft' ? step(-1) : null)
+    addEventListener('keydown', key)
+    document.body.style.overflow = 'hidden'
+    return () => (removeEventListener('keydown', key), (document.body.style.overflow = ''))
+  }, [])
+  return (
+    <div class="lightbox" role="dialog" aria-label="Image viewer" onClick={close}
+      onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
+      onTouchEnd={(e) => {
+        const dx = e.changedTouches[0].clientX - touch.current
+        Math.abs(dx) > 50 && step(dx < 0 ? 1 : -1)
+      }}>
+      <img src={urls[i]} alt="" referrerpolicy="no-referrer" onClick={stop} />
+      <button class="lb-btn lb-close" aria-label="Close" onClick={close}><Icon d={P.x} size={22} /></button>
+      {many && (
+        <>
+          <button class="lb-btn lb-prev" aria-label="Previous image" onClick={(e) => (stop(e), step(-1))}><Icon d={P.back} size={22} /></button>
+          <button class="lb-btn lb-next" aria-label="Next image" onClick={(e) => (stop(e), step(1))}><Icon d={P.back} size={22} /></button>
+          <span class="lb-count">{i + 1} / {urls.length}</span>
+        </>
+      )}
+      <a class="lb-open" href={urls[i]} target="_blank" rel="noopener noreferrer" onClick={stop}>Open original</a>
+    </div>
   )
 }
 
@@ -137,7 +177,7 @@ function LinkCard({ u }: { u: string }) {
     return null
   }
   // a link straight to an image renders as the image
-  if (d?.image && d.image === d.url) return <div class="imgs n1"><img src={d.image} alt="" loading="lazy" referrerpolicy="no-referrer" /></div>
+  if (d?.image && d.image === d.url) return <Media urls={[d.image]} />
   const meta = (
     <span class="lc-text">
       <span class="lc-site">{d?.icon && <img src={d.icon} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}{d?.site || host}</span>
@@ -172,7 +212,7 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
     <a class="quote" href={`/c/${c.hash}`} onClick={stop}>
       <div class="meta"><Avatar u={c.author} size={18} link={false} /><b>{c.author.display_name || handle(c.author)}</b><span>@{handle(c.author)} · {ago(c.timestamp)}</span></div>
       <div class="qbody">
-        <RichText text={c.text} class="text clamp" />
+        <RichText text={castText(c)} class="text clamp" />
         {img && <img class="qimg" src={img} alt="" loading="lazy" referrerpolicy="no-referrer" />}
       </div>
     </a>
@@ -249,7 +289,7 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
     return (
       <article class="cast focus">
         <header><Avatar u={c.author} size={44} /><div class="who">{name}</div>{ch && <span class="chan">/{ch}</span>}</header>
-        <RichText text={c.text} />
+        <RichText text={castText(c)} />
         <Embeds c={c} />
         <div class="when">{new Date(c.timestamp).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })}</div>
         {(recasts > 0 || likes > 0) && <div class="stats">{recasts > 0 && <span><b>{n(recasts)}</b> recasts</span>}{likes > 0 && <span><b>{n(likes)}</b> likes</span>}</div>}
@@ -267,7 +307,7 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
           {ch && <span class="chan">/{ch}</span>}
         </header>
         {c.parent_hash && !inThread && <div class="replying">Replying to {parentUser ? <a href={userPath(parentUser)} onClick={stop}>@{handle(parentUser)}</a> : 'a cast'}</div>}
-        <RichText text={c.text} />
+        <RichText text={castText(c)} />
         <Embeds c={c} />
         {actions}
       </div>
