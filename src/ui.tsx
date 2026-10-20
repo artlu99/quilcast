@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, castText, get, go, LINK_RE, mine, toUrl, users, type Cast, type User } from './api.ts'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { account, castText, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -62,7 +62,8 @@ const stop = (e: Event) => e.stopPropagation()
 
 export const Avatar = ({ u, size = 40, link = true }: { u: User; size?: number; link?: boolean }) => {
   const style = { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.42)}px` }
-  const inner = u.pfp_url ? <img src={u.pfp_url} alt="" loading="lazy" referrerpolicy="no-referrer" /> : <span>{(u.display_name || u.username || '?')[0]}</span>
+  const pfp = safeUrl(u.pfp_url)
+  const inner = pfp ? <img src={pfp} alt="" loading="lazy" referrerpolicy="no-referrer" /> : <span>{[...(u.display_name || u.username || '?')][0]}</span>
   return link ? <a class="avatar" href={userPath(u)} style={style} onClick={stop} aria-label={u.display_name || u.username}>{inner}</a> : <span class="avatar" style={style}>{inner}</span>
 }
 
@@ -75,7 +76,8 @@ export function RichText({ text, class: cls = 'text' }: { text: string; class?: 
         i % 2 === 0 ? p
           : p[0] === '@' ? <a key={i} href={`/u/${p.slice(1)}`} onClick={stop}>{p}</a>
             : p[0] === '/' ? <span key={i} class="chan-ref">{p}</span>
-              : <a key={i} href={toUrl(p)} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}{p.replace(/^https?:\/\/(www\.)?/, '').length > 40 ? '…' : ''}</a>,
+              : !safeUrl(toUrl(p)) ? p
+                : <a key={i} href={safeUrl(toUrl(p))} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}{p.replace(/^https?:\/\/(www\.)?/, '').length > 40 ? '…' : ''}</a>,
       )}
     </p>
   )
@@ -101,13 +103,14 @@ export function Video({ src }: { src: string }) {
   }
   return (
     <div class="vid" onClick={stop}>
-      <video ref={ref} src={hls ? undefined : src} controls={ready} preload="metadata" playsInline />
+      <video ref={ref} src={hls ? undefined : src} poster={/^https:\/\/stream\.farcaster\.xyz\//.test(src) ? `/api/poster?url=${encodeURIComponent(src)}` : undefined} controls={ready} preload="metadata" playsInline />
       {!ready && <button class="play" aria-label="Play video" onClick={start}><Icon d={P.play} fill size={26} /></button>}
     </div>
   )
 }
 
-export function Media({ urls }: { urls: string[] }) {
+export function Media({ urls: given }: { urls: string[] }) {
+  const urls = given.map(safeUrl).filter((u): u is string => !!u)
   const imgs = urls.filter(isImg)
   const shown = imgs.slice(0, 4)
   return (
@@ -146,7 +149,7 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
         const dx = e.changedTouches[0].clientX - touch.current
         Math.abs(dx) > 50 && step(dx < 0 ? 1 : -1)
       }}>
-      <img src={urls[i]} alt="" referrerpolicy="no-referrer" onClick={stop} />
+      <img src={safeUrl(urls[i])} alt="" referrerpolicy="no-referrer" onClick={stop} />
       <button class="lb-btn lb-close" aria-label="Close" onClick={close}><Icon d={P.x} size={22} /></button>
       {many && (
         <>
@@ -155,7 +158,7 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
           <span class="lb-count">{i + 1} / {urls.length}</span>
         </>
       )}
-      <a class="lb-open" href={urls[i]} target="_blank" rel="noopener noreferrer" onClick={stop}>Open original</a>
+      {safeUrl(urls[i]) && <a class="lb-open" href={safeUrl(urls[i])} target="_blank" rel="noopener noreferrer" onClick={stop}>Open original</a>}
     </div>
   )
 }
@@ -166,16 +169,16 @@ type Unfurl = { url: string; title?: string; description?: string; site?: string
 const X_LOGO = 'M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.19L2 3h6.33l4.37 5.77zm-1.08 16.17h1.7L7.4 4.74H5.58z'
 function TweetCard({ u, t }: { u: string; t: Tweet }) {
   return (
-    <div class="tweet" onClick={(e) => (stop(e), open(u, '_blank', 'noopener'))} role="link" tabIndex={0}>
+    <div class="tweet" onClick={(e) => (stop(e), safeUrl(u) && open(safeUrl(u), '_blank', 'noopener,noreferrer'))} role="link" tabIndex={0}>
       <div class="tw-head">
-        {t.author.avatar && <img class="tw-av" src={t.author.avatar} alt="" loading="lazy" referrerpolicy="no-referrer" />}
+        {safeUrl(t.author.avatar) && <img class="tw-av" src={safeUrl(t.author.avatar)} alt="" loading="lazy" referrerpolicy="no-referrer" />}
         <b>{t.author.name}</b><span class="handle">@{t.author.handle}</span>
         {t.at && <span class="handle">· {ago(new Date(t.at * 1000).toISOString())}</span>}
         <svg class="tw-x" viewBox="0 0 24 24" width="16" height="16" aria-label="X"><path d={X_LOGO} fill="currentColor" /></svg>
       </div>
       {t.text && <RichText text={t.text.replace(/\s*https:\/\/t\.co\/\S+$/, '')} class="text tw-text" />}
       {t.photos.length > 0 && <Media urls={t.photos} />}
-      {!t.photos.length && t.video && <div class="tw-video"><img src={t.video} alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="play"><Icon d={P.play} fill size={24} /></span></div>}
+      {!t.photos.length && safeUrl(t.video) && <div class="tw-video"><img src={safeUrl(t.video)} alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="play"><Icon d={P.play} fill size={24} /></span></div>}
       {t.quote && <div class="tw-quote"><b>{t.quote.name}</b> <span class="handle">@{t.quote.handle}</span><p>{t.quote.text}</p></div>}
       <div class="tw-stats"><span>{n(t.replies)} replies</span><span>{n(t.reposts)} reposts</span><span>{n(t.likes)} likes</span></div>
     </div>
@@ -188,28 +191,27 @@ const unfurl = (u: string) => {
 }
 
 // Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives
-export function LinkCard({ u }: { u: string }) {
+export function LinkCard({ u: given }: { u: string }) {
+  const u = safeUrl(given)
   const [d, setD] = useState<Unfurl | undefined>(undefined)
-  useEffect(() => void unfurl(u).then(setD), [u])
-  let host = ''
-  try {
-    host = new URL(u).hostname.replace(/^www\./, '')
-  } catch {
-    return null
-  }
+  useEffect(() => void (u && unfurl(u).then(setD)), [u])
+  if (!u) return null
+  const host = new URL(u).hostname.replace(/^www\./, '')
+  const image = safeUrl(d?.image)
+  const icon = safeUrl(d?.icon)
   if (d?.tweet) return <TweetCard u={u} t={d.tweet} />
   // a link straight to an image renders as the image
-  if (d?.image && d.image === d.url) return <Media urls={[d.image]} />
+  if (image && d?.image === d?.url) return <Media urls={[image]} />
   const meta = (
     <span class="lc-text">
-      <span class="lc-site">{d?.icon && <img src={d.icon} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}{d?.site || host}</span>
+      <span class="lc-site">{icon && <img src={icon} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}{host}</span>
       {d?.title && <b class="lc-title">{d.title}</b>}
       {d?.description && <span class="lc-desc">{d.description}</span>}
     </span>
   )
   return (
-    <a class={`linkcard${d?.image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
-      {d?.image && <img class="lc-img" src={d.image} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
+    <a class={`linkcard${image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
+      {image && <img class="lc-img" src={image} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
       {meta}
       {d?.button && <span class="lc-btn">{d.button}</span>}
     </a>
@@ -228,7 +230,7 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
   useEffect(() => void (hash && !given && fetchCast(hash).then(setC)), [hash])
   if (c === null) return <div class="quote muted">This cast is unavailable.</div>
   if (!c) return <div class="quote skeleton" />
-  const urls = c.embeds.map((e) => e.url).filter((u): u is string => !!u)
+  const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
   const img = urls.find(isImg)
   return (
     <a class="quote" href={`/c/${c.hash}`} onClick={stop}>
@@ -242,13 +244,13 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
 }
 
 function Embeds({ c }: { c: Cast }) {
-  const urls = c.embeds.map((e) => e.url).filter((u): u is string => !!u)
+  const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
   const links = urls.filter((u) => !isImg(u) && !isVid(u))
   return (
     <>
       <Media urls={urls} />
       {links.map((u) => <LinkCard u={u} />)}
-      {c.embeds.filter((e) => e.cast_id).map((e) => <QuoteCard hash={e.cast_id!.hash} />)}
+      {c.embeds.filter((e) => /^(0x)?[0-9a-f]{40}$/i.test(e.cast_id?.hash || '')).map((e) => <QuoteCard hash={e.cast_id!.hash} />)}
     </>
   )
 }
@@ -269,9 +271,12 @@ function RecastMenu({ c, on, toggle, close }: { c: Cast; on: boolean; toggle: ()
 
 /** A cast row. `focus` is the thread's main cast; `line` draws the thread connector down to the next row. */
 export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolean; line?: boolean; inThread?: boolean }) {
-  const [was] = useState(() => [mine.likes.has(c.hash), mine.recasts.has(c.hash)])
-  const [liked, setLiked] = useState(was[0])
-  const [recast, setRecast] = useState(was[1])
+  // what the node counted already includes our earlier reactions; local taps adjust from there
+  const was = useMemo(() => [mine.likes.has(c.hash), mine.recasts.has(c.hash)], [c.hash, mineVersion])
+  const [likedTap, setLiked] = useState<boolean | null>(null)
+  const [recastTap, setRecast] = useState<boolean | null>(null)
+  const liked = likedTap ?? was[0]
+  const recast = recastTap ?? was[1]
   const [menu, setMenu] = useState(false)
   const [gone, setGone] = useState(false)
   const toggle = (type: 1 | 2, on: boolean, set: (v: boolean) => void, bag: Set<string>) => {
@@ -285,6 +290,7 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
     navigator.share ? navigator.share({ url }).catch(() => {}) : navigator.clipboard.writeText(url).then(() => toast('Link copied'))
   }
   if (gone) return null
+  const sending = posting.get(c.hash) === c
   const ch = channelOf(c.parent_url)
   const parentUser = c.parent_author?.fid ? users.get(c.parent_author.fid) : undefined
   const likes = c.reactions.likes_count + +liked - +was[0]
@@ -313,7 +319,7 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
         <header><Avatar u={c.author} size={44} /><div class="who">{name}</div>{ch && <span class="chan">/{ch}</span>}</header>
         <RichText text={castText(c)} />
         <Embeds c={c} />
-        <div class="when">{new Date(c.timestamp).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })}</div>
+        <div class="when">{sending ? <span class="posting"><span class="pulse" /> Posting…</span> : new Date(c.timestamp).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })}</div>
         {(recasts > 0 || likes > 0) && <div class="stats">{recasts > 0 && <span><b>{n(recasts)}</b> recasts</span>}{likes > 0 && <span><b>{n(likes)}</b> likes</span>}</div>}
         {actions}
       </article>
@@ -325,7 +331,7 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
         <header>
           {name}
           <span class="dot">·</span>
-          <time dateTime={c.timestamp} title={new Date(c.timestamp).toLocaleString()}>{ago(c.timestamp)}</time>
+          {sending ? <span class="posting">Posting…</span> : <time dateTime={c.timestamp} title={new Date(c.timestamp).toLocaleString()}>{ago(c.timestamp)}</time>}
           {ch && <span class="chan">/{ch}</span>}
         </header>
         {c.parent_hash && !inThread && <div class="replying">Replying to {parentUser ? <a href={userPath(parentUser)} onClick={stop}>@{handle(parentUser)}</a> : 'a cast'}</div>}

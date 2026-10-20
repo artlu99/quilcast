@@ -1,6 +1,6 @@
 import { render, type ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, accounts, back, get, go, hydrateParents, isFollowing, loadMine, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
+import { account, accounts, back, castText, get, go, hydrateParents, isFollowing, loadMine, posting, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { ago, Avatar, CastCard, handle, Icon, Lightbox, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
@@ -87,8 +87,8 @@ type Page = { casts: Cast[]; next?: { cursor?: string | null } }
 type Chunk<T> = { items: T[]; cursor: string | null }
 
 /** Cursor pagination with infinite scroll. `id` dedupes items across pages. */
-function Pager<T>({ load, k, empty, id, row }: { load: (cursor?: string) => Promise<Chunk<T>>; k: string; empty?: string; id: (t: T) => string; row: (items: T[]) => ComponentChildren }) {
-  const [items, setItems] = useState<T[]>([])
+function Pager<T>({ load, k, empty, id, row, initial }: { load: (cursor?: string) => Promise<Chunk<T>>; k: string; empty?: string; id: (t: T) => string; row: (items: T[]) => ComponentChildren; initial?: () => T[] }) {
+  const [items, setItems] = useState<T[]>(() => initial?.() || [])
   const [cursor, setCursor] = useState<string | null | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -116,7 +116,8 @@ function Pager<T>({ load, k, empty, id, row }: { load: (cursor?: string) => Prom
   }
   useEffect(() => {
     state.current.key = k
-    setItems([])
+    // a cached first page shows instantly and is replaced when the fresh one arrives
+    setItems(initial?.() || [])
     setCursor(undefined)
     more(true)
   }, [k])
@@ -130,34 +131,54 @@ function Pager<T>({ load, k, empty, id, row }: { load: (cursor?: string) => Prom
     <>
       {row(items)}
       {err && <div class="note">Couldn't load: {err} <button class="link-btn" onClick={() => more()}>Retry</button></div>}
-      {busy && <div class="spinner" aria-label="Loading" />}
+      {busy && (items.length ? <div class="spinner" aria-label="Loading" /> : <div aria-label="Loading">{[0, 1, 2, 3].map(() => <div class="skel"><i /><span><b /><b /><b /></span></div>)}</div>)}
       {cursor === null && !items.length && !err && !busy && <div class="note">{empty || 'Nothing here yet.'}</div>}
       <div ref={sentinel} />
     </>
   )
 }
 
-const Feed = ({ load, k, empty, keep }: { load: (cursor?: string) => Promise<Page>; k: string; empty?: string; keep?: (c: Cast) => boolean }) => (
-  <Pager<Cast> k={k} empty={empty} id={(c) => c.hash} row={(cs) => cs.map((c) => <CastCard key={c.hash} c={c} />)}
+// first pages of the home feeds are kept per account, so a reload paints immediately
+const stash = {
+  get: (key?: string): Cast[] | undefined => {
+    try {
+      return key ? JSON.parse(localStorage.getItem(`quilcast:feed:${key}`) || 'null') || undefined : undefined
+    } catch {}
+  },
+  set: (key: string | undefined, casts: Cast[]) => {
+    try {
+      key && localStorage.setItem(`quilcast:feed:${key}`, JSON.stringify(casts.slice(0, 20)))
+    } catch {}
+  },
+}
+
+const Feed = ({ load, k, empty, keep, cacheKey }: { load: (cursor?: string) => Promise<Page>; k: string; empty?: string; keep?: (c: Cast) => boolean; cacheKey?: string }) => (
+  <Pager<Cast> k={k} empty={empty} id={(c) => c.hash} row={(cs) => cs.map((c) => <CastCard key={c.hash} c={c} />)} initial={() => stash.get(cacheKey) || []}
     load={async (cursor) => {
       const r = await load(cursor)
       const casts = keep ? r.casts.filter(keep) : r.casts
       await hydrateParents(casts)
+      if (!cursor) stash.set(cacheKey, casts)
       return { items: casts, cursor: r.casts.length ? r.next?.cursor || null : null }
     }} />
 )
 
-// --- views ---
-
-function Home() {
-  const [tab, setTab] = useState<'following' | 'trending'>(account?.done ? 'following' : 'trending')
-  // tapping the current tab, or Home while already home, reloads the feed from the top
+/** Tapping the tab or nav item you're already on reloads the list from the top. */
+function useReload(): [number, () => void] {
   const [round, setRound] = useState(0)
   const reload = () => (scrollTo(0, 0), setRound((r) => r + 1))
   useEffect(() => {
     addEventListener('refresh', reload)
     return () => removeEventListener('refresh', reload)
   }, [])
+  return [round, reload]
+}
+
+// --- views ---
+
+function Home() {
+  const [tab, setTab] = useState<'following' | 'trending'>(account?.done ? 'following' : 'trending')
+  const [round, reload] = useReload()
   return (
     <>
       <Header title="Home" back={false}>
@@ -169,8 +190,9 @@ function Home() {
           <a class="btn small" href="/join">Join</a>
         </div>
       )}
-      <Feed k={`${tab}:${round}`} empty="Follow a few people and their casts will show up here." keep={(c) => !c.parent_hash}
-        load={(cursor) => (tab === 'following' ? get('/v2/farcaster/feed/following', { fid: account!.fid, limit: 25, cursor }) : get('/v2/farcaster/feed/trending', { limit: 25, cursor }))} />
+      {/* about half of a page is replies, which home leaves out, so pages are 50 */}
+      <Feed k={`${tab}:${round}`} cacheKey={`${account?.fid || 0}:${tab}`} empty="Follow a few people and their casts will show up here." keep={(c) => !c.parent_hash}
+        load={(cursor) => (tab === 'following' ? get('/v2/farcaster/feed/following', { fid: account!.fid, limit: 50, cursor }) : get('/v2/farcaster/feed/trending', { limit: 50, cursor }))} />
     </>
   )
 }
@@ -178,15 +200,17 @@ function Home() {
 type Note = { type: string; cast?: Cast | null; user: User; timestamp: string }
 type Group = { key: string; type: string; cast?: Cast | null; users: User[]; timestamp: string }
 const seenKey = () => `quilcast:seen:${account?.fid}`
-const ACT: Record<string, [string, string, string]> = {
+const ACTS: Record<string, [string, string, string]> = {
   likes: ['liked your cast', P.like, 'lk'],
   recasts: ['recast your cast', P.recast, 'rc'],
   follows: ['followed you', P.user, 'fo'],
 }
+// `type` comes from the node, so only own keys count (no `__proto__` surprises)
+const ACT = (t: string) => (Object.hasOwn(ACTS, t) ? ACTS[t] : undefined)
 
 function NoteRow({ g }: { g: Group }) {
-  if (g.cast && !ACT[g.type]) return <CastCard c={g.cast} />
-  const [verb, icon, cls] = ACT[g.type] || [g.type, P.user, 'fo']
+  if (g.cast && !ACT(g.type)) return <CastCard c={g.cast} />
+  const [verb, icon, cls] = ACT(g.type) || [String(g.type), P.user, 'fo']
   const first = g.users[0]
   return (
     <a class="note-row" href={g.cast ? `/c/${g.cast.hash}` : userPath(first)}>
@@ -194,7 +218,7 @@ function NoteRow({ g }: { g: Group }) {
       <span class="note-body">
         <span class="note-avatars">{g.users.slice(0, 7).map((u) => <Avatar u={u} size={30} link={false} />)}</span>
         <span><b>{first.display_name || handle(first)}</b>{g.users.length > 1 && ` and ${g.users.length - 1} ${g.users.length === 2 ? 'other' : 'others'}`} {verb} <span class="muted">· {ago(g.timestamp)}</span></span>
-        {g.cast && <span class="note-cast">{g.cast.text || 'Your cast'}</span>}
+        {g.cast && <span class="note-cast">{castText(g.cast) || 'Your cast'}</span>}
       </span>
     </a>
   )
@@ -204,7 +228,7 @@ function NoteRow({ g }: { g: Group }) {
 const group = (notes: Note[]) => {
   const out = new Map<string, Group>()
   for (const n of notes) {
-    const key = ACT[n.type] ? `${n.type}:${n.cast?.hash || n.timestamp.slice(0, 10)}` : `${n.type}:${n.cast?.hash}:${n.user.fid}`
+    const key = ACT(n.type) ? `${n.type}:${n.cast?.hash || String(n.timestamp).slice(0, 10)}` : `${n.type}:${n.cast?.hash}:${n.user.fid}`
     const g = out.get(key)
     if (g) !g.users.some((u) => u.fid === n.user.fid) && g.users.push(n.user)
     else out.set(key, { key, type: n.type, cast: n.cast, users: [n.user], timestamp: n.timestamp })
@@ -212,8 +236,19 @@ const group = (notes: Note[]) => {
   return [...out.values()]
 }
 
+// Hypersnap's notifications leave quotes out, so they're looked up per cast
+// ponytail: only quotes of our 25 newest casts show up; quote notifications on the node would cover the rest
+async function quotesOfMine(): Promise<Note[]> {
+  const casts = (await get('/v2/farcaster/feed/user/casts', { fid: account!.fid, limit: 25 })).casts as Cast[]
+  const lists = await Promise.all(casts.map((c) => get('/v2/farcaster/cast/quotes', { identifier: c.hash, type: 'hash', limit: 25 }).then((r) => r.casts as Cast[], () => [])))
+  const quotes = new Map(lists.flat().filter((q) => q.author.fid !== account!.fid).map((q) => [q.hash, q]))
+  return [...quotes.values()].map((q) => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp }))
+}
+
 function Notifications() {
   const [tab, setTab] = useState<'all' | 'replies'>('all')
+  const [round, reload] = useReload()
+  const held = useRef<Note[]>([])
   useEffect(() => {
     // opening the page marks everything up to now as seen
     localStorage.setItem(seenKey(), String(Date.now()))
@@ -223,16 +258,24 @@ function Notifications() {
   return (
     <>
       <Header title="Notifications">
-        <Tabs tabs={[['all', 'All'], ['replies', 'Replies & mentions']]} value={tab} set={setTab} />
+        <Tabs tabs={[['all', 'All'], ['replies', 'Replies & mentions']]} value={tab} set={(t) => (t === tab ? reload() : setTab(t))} />
       </Header>
-      <Pager<Note> k={tab} empty="Nothing yet. When people reply, like or follow you, it shows up here."
+      <Pager<Note> k={`${tab}:${round}`} empty="Nothing yet. When people reply, like or follow you, it shows up here."
         id={(n) => `${n.type}:${n.cast?.hash}:${n.user.fid}:${n.timestamp}`}
         row={(ns) => group(ns).map((g) => <NoteRow key={g.key} g={g} />)}
         load={async (cursor) => {
-          const r = await get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor })
-          const items = (r.notifications as Note[]).filter((n) => n.user && (tab === 'all' || (n.cast && !ACT[n.type])))
+          const [r, quotes] = await Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor }), cursor ? held.current : quotesOfMine().catch(() => [])])
+          const notes = r.notifications as Note[]
+          const next = notes.length ? r.next?.cursor || null : null
+          // quotes slot in by time; ones older than this page wait for a later one
+          const edge = next ? notes[notes.length - 1].timestamp : ''
+          const seen = new Set(notes.map((n) => n.cast?.hash))
+          held.current = quotes.filter((q) => q.timestamp < edge)
+          const items = [...notes, ...quotes.filter((q) => q.timestamp >= edge && !seen.has(q.cast!.hash))]
+            .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+            .filter((n) => n.user && (tab === 'all' || (n.cast && !ACT(n.type))))
           await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
-          return { items, cursor: r.notifications.length ? r.next?.cursor || null : null }
+          return { items, cursor: next }
         }} />
     </>
   )
@@ -266,27 +309,36 @@ function Thread({ hash }: { hash: string }) {
     setC(null)
     setUp([])
     setErr('')
-    // a cast we just posted can take a moment to be indexed, so retry a few times
+    // walk up to five parents so the reply reads in context
+    let walked = false
+    const parents = async (cast: Cast) => {
+      if (walked) return
+      walked = true
+      const chain: Cast[] = []
+      for (let p = cast.parent_hash; p && chain.length < 5; ) {
+        const pc = (await get('/v2/farcaster/cast', { identifier: p, type: 'hash' }).catch(() => null))?.cast as Cast | undefined
+        if (!pc || !live) break
+        chain.unshift(pc)
+        setUp([...chain])
+        p = pc.parent_hash
+      }
+    }
+    // a cast we just posted shows right away and takes a moment to be indexed, so retry until it is
+    const sent = posting.get(hash)
+    if (sent) setC(sent), parents(sent)
     const load = (tries: number): unknown =>
       get('/v2/farcaster/cast/conversation', { identifier: hash.replace(/^0x/, ''), type: 'hash', reply_depth: 2 }).then(
         async (r) => {
           const cast: Cast = r.conversation.cast
           await hydrateParents([cast, ...(cast.direct_replies || [])])
           if (!live) return
+          posting.delete(hash)
           setC(cast)
-          // walk up to five parents so the reply reads in context
-          const chain: Cast[] = []
-          for (let p = cast.parent_hash; p && chain.length < 5; ) {
-            const pc = (await get('/v2/farcaster/cast', { identifier: p, type: 'hash' }).catch(() => null))?.cast as Cast | undefined
-            if (!pc || !live) break
-            chain.unshift(pc)
-            setUp([...chain])
-            p = pc.parent_hash
-          }
+          parents(cast)
         },
-        (e) => live && (tries ? setTimeout(() => load(tries - 1), 1500) : setErr(e.message)),
+        (e) => live && (tries ? setTimeout(() => load(tries - 1), 1500) : !sent && setErr(e.message)),
       )
-    load(5)
+    load(sent ? 40 : 5)
     return () => void (live = false)
   }, [hash])
   return (
@@ -408,7 +460,8 @@ function Settings() {
   const [prof, setProf] = useState<Record<number, string>>({})
   const [orig, setOrig] = useState<Record<number, string>>({})
   const [phrase, setPhrase] = useState(false)
-  const [out, setOut] = useState(false)
+  const [out, setOut] = useState<false | 'ask' | 'busy' | 'stuck'>(false)
+  const asked = useRef(0)
   const [saving, setSaving] = useState(false)
   const photo = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -444,9 +497,27 @@ function Settings() {
       toast(e.message)
     }
   }
+  // the signer revokes itself first, so a copy of it (an export, a synced profile) stops working too
+  const signOut = async () => {
+    // the confirm button sits where Sign out was, so it ignores clicks for a moment (no double-click erase)
+    if (!out) return (asked.current = Date.now()), setOut('ask')
+    if (out === 'busy' || Date.now() - asked.current < 1000) return
+    if (out === 'ask') {
+      setOut('busy')
+      try {
+        await (await w()).revokeSigner(account!)
+      } catch (e: any) {
+        toast(`The signing key couldn't be revoked: ${e.message}`)
+        asked.current = Date.now()
+        return setOut('stuck')
+      }
+    }
+    setAccount(null)
+    location.assign('/')
+  }
   const exportKeys = async () => {
     const [m, fc] = await Promise.all([w(), import('./fc.ts')])
-    const custody = m.custodyKey(account!.phrase)
+    const custody = await m.custodyKey(account!.phrase)
     const data = { fid: account!.fid, username: account!.username, recoveryPhrase: account!.phrase, custodyAddress: fc.address(custody), custodyPrivateKey: '0x' + fc.hex(custody), signerPrivateKey: account!.signer && '0x' + account!.signer }
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: `quilcast-${account!.username || account!.fid}-keys.json` })
     a.click()
@@ -494,7 +565,8 @@ function Settings() {
             <div class="setting"><span>Recovery phrase</span><span class="btns"><button class="btn ghost small" onClick={() => setPhrase(!phrase)}>{phrase ? 'Hide' : 'Show'}</button><button class="btn ghost small" onClick={() => navigator.clipboard.writeText(account!.phrase).then(() => toast('Copied'))}>Copy</button></span></div>
             {phrase && <code class="phrase">{account.phrase}</code>}
             <div class="setting"><span>All keys as a file</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
-            <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" onClick={() => (out ? (setAccount(null), location.assign('/')) : setOut(true))}>{out ? 'Erase keys?' : 'Sign out'}</button></div>
+            <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" disabled={out === 'busy'} onClick={signOut}>{out === 'busy' ? 'Signing out…' : out === 'stuck' ? 'Sign out anyway' : out ? 'Erase keys?' : 'Sign out'}</button></div>
+            {out && <p class="hint">This erases the recovery phrase from this browser. Export your keys first if it's your only copy.</p>}
           </section>
         )}
         <section>
@@ -532,6 +604,14 @@ const useRoute = () => {
   return p.slice(1).split('/')
 }
 
+const decode = (s: string) => {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return s
+  }
+}
+
 function App() {
   const [, force] = useState(0)
   const [compose, setCompose] = useState<Parameters<typeof shell.compose>[0] | null>(null)
@@ -553,7 +633,7 @@ function App() {
   const me = account?.done ? users.get(account.fid!) || { fid: account.fid!, username: account.username } : null
   const view =
     r0 === 'c' ? <Thread hash={r1} />
-      : r0 === 'u' ? <Profile id={decodeURIComponent(r1)} />
+      : r0 === 'u' ? <Profile id={decode(r1)} />
         : r0 === 'search' ? <Search />
           : r0 === 'notifications' ? <Notifications />
           : r0 === 'settings' ? <Settings />

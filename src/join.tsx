@@ -1,7 +1,7 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { useEffect, useState } from 'preact/hooks'
-import { account, get, go, loadMine, setAccount, settings, USER_DATA, type Account } from './api.ts'
+import { account, fidForAddress, get, go, setAccount, settings, USER_DATA, type Account } from './api.ts'
 import { balance, fidOf, register, registerPrice } from './eth.ts'
 import { address, fnameProof } from './fc.ts'
 import { custodyKey, ensureSigner, setUserData } from './write.ts'
@@ -10,12 +10,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const eth = (wei: bigint) => (Number(wei) / 1e18).toFixed(6).replace(/\.?0+$/, '')
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,15}$/
 
+// likes and recasts load in the background once the account is set; the feed doesn't wait for them
 const finish = async (a: Account) => {
   const u = await get('/v2/farcaster/user', { fid: a.fid }).catch(() => null)
   setAccount({ ...account!, username: a.username || u?.user?.username, done: true })
-  await loadMine()
   go('/')
 }
+
+const Steps = ({ steps, at }: { steps: string[]; at: number }) => (
+  <ol class="steps">{steps.map((s, i) => <li class={i < at ? 'done' : i === at ? 'now' : ''}>{s}</li>)}</ol>
+)
 
 export function Join() {
   const [mode, setMode] = useState<'pick' | 'create' | 'signin'>('pick')
@@ -66,33 +70,40 @@ function Create({ back }: { back: () => void }) {
   )
 }
 
+const SIGN_IN = ['Reading your recovery phrase', 'Finding your Farcaster account', 'Adding a signing key for this browser', 'Loading your profile']
 function SignIn({ back }: { back: () => void }) {
   const [phrase, setPhrase] = useState('')
   const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [at, setAt] = useState(-1)
   const go = async () => {
     const p = phrase.trim().toLowerCase().split(/\s+/).join(' ')
     if (!validateMnemonic(p, wordlist)) return setErr("That doesn't look like a valid recovery phrase. Check the words and their order.")
-    setBusy(true)
     setErr('')
     try {
-      const fid = await fidOf(settings.rpc, address(custodyKey(p)))
+      setAt(0)
+      const addr = address(await custodyKey(p))
+      setAt(1)
+      const fid = await fidForAddress(addr, () => fidOf(settings.rpc, addr))
       if (!fid) throw new Error('No Farcaster account belongs to this phrase.')
+      setAt(2)
       const a = { phrase: p, fid, done: true }
       await ensureSigner(a)
+      setAt(3)
       await finish(a)
     } catch (e: any) {
       setErr(e.message)
-      setBusy(false)
+      setAt(-1)
     }
   }
+  const busy = at >= 0
   return (
     <div class="join">
       <button class="link-btn" onClick={back}>← Back</button>
       <h1>Sign in</h1>
       <p class="lede">Enter the 12 or 24 word recovery phrase of your Farcaster account. Quilcast keeps it in this browser and uses it to add a signing key for this device.</p>
-      <textarea rows={4} value={phrase} onInput={(e) => setPhrase(e.currentTarget.value)} placeholder="apple banana cherry …" autocapitalize="none" spellcheck={false} />
+      <textarea rows={4} value={phrase} disabled={busy} onInput={(e) => setPhrase(e.currentTarget.value)} placeholder="apple banana cherry …" autocapitalize="none" spellcheck={false} />
       {err && <p class="warn">{err}</p>}
+      {busy && <section class="card"><Steps steps={SIGN_IN} at={at} /></section>}
       <button class="btn wide" disabled={busy || !phrase.trim()} onClick={go}>{busy ? 'Signing in…' : 'Sign in'}</button>
     </div>
   )
@@ -102,18 +113,21 @@ function SignIn({ back }: { back: () => void }) {
 // chain and the node, so a reload resumes wherever it stopped.
 function Setup() {
   const a = account!
-  const custody = custodyKey(a.phrase)
-  const addr = address(custody)
+  const [addr, setAddr] = useState('')
   const [need, setNeed] = useState<bigint | null>(null)
   const [bal, setBal] = useState<bigint | null>(null)
   const [step, setStep] = useState(a.fid ? 'setup' : 'fund')
   const [err, setErr] = useState('')
   const [saved, setSaved] = useState(false)
+  const [quit, setQuit] = useState(0)
 
   useEffect(() => {
     let live = true
     let sent = false
     ;(async () => {
+      const custody = await custodyKey(a.phrase)
+      const addr = address(custody)
+      setAddr(addr)
       while (live && !account!.fid) {
         try {
           const fid = await fidOf(settings.rpc, addr)
@@ -122,6 +136,8 @@ function Setup() {
             break
           }
           const [p, b] = await Promise.all([registerPrice(settings.rpc), balance(settings.rpc, addr)])
+          // ~0.0001 ETH today; anything far above that means a wrong or hostile RPC
+          if (p <= 0n || p > 10n ** 16n) throw new Error('The registration price from the Optimism RPC looks wrong. Check the RPC in settings.')
           const want = (p * 102n) / 100n
           setNeed(want + 10n ** 13n)
           setBal(b)
@@ -180,11 +196,15 @@ function Setup() {
           <section class={`card${saved ? '' : ' dim'}`}>
             <h2>2. Send ETH on Optimism</h2>
             <p class="muted">Registering a Farcaster ID costs a small fee paid on the Optimism network, which includes a year of storage. Send at least the amount below to your new address from any wallet or exchange that supports Optimism.</p>
-            <div class="kv"><span>Amount</span><b>{need === null ? '…' : `${eth(need)} ETH`}</b>{need !== null && <button class="link-btn" onClick={() => copy(eth(need))}>Copy</button>}</div>
-            <div class="kv"><span>Address</span><code>{addr}</code><button class="link-btn" onClick={() => copy(addr)}>Copy</button></div>
-            <div class="kv"><span>Network</span><b>Optimism (OP Mainnet)</b></div>
-            {need !== null && <a class="btn ghost wide" href={`ethereum:${addr}@10?value=${need}`}>Open in a wallet app</a>}
-            <p class="waiting"><span class="pulse" /> {bal === null ? 'Checking balance…' : `Balance ${eth(bal)} ETH. Waiting for funds…`}</p>
+            {saved && (
+              <>
+                <div class="kv"><span>Amount</span><b>{need === null ? '…' : `${eth(need)} ETH`}</b>{need !== null && <button class="link-btn" onClick={() => copy(eth(need))}>Copy</button>}</div>
+                <div class="kv"><span>Address</span><code>{addr || '…'}</code>{addr && <button class="link-btn" onClick={() => copy(addr)}>Copy</button>}</div>
+                <div class="kv"><span>Network</span><b>Optimism (OP Mainnet)</b></div>
+                {need !== null && addr && <a class="btn ghost wide" href={`ethereum:${addr}@10?value=${need}`}>Open in a wallet app</a>}
+                <p class="waiting"><span class="pulse" /> {bal === null ? 'Checking balance…' : `Balance ${eth(bal)} ETH. Waiting for funds…`}</p>
+              </>
+            )}
           </section>
         </>
       )}
@@ -198,7 +218,11 @@ function Setup() {
         </section>
       )}
       {err && <p class="warn">{err}</p>}
-      {step === 'fund' && bal === 0n && <button class="link-btn danger" onClick={() => setAccount(null)}>Start over</button>}
+      {step === 'fund' && bal === 0n && (
+        <button class="link-btn danger" onClick={() => (!quit ? setQuit(Date.now()) : Date.now() - quit > 1000 && setAccount(null))}>
+          {quit ? 'Delete this recovery phrase? Only if you sent nothing to it' : 'Start over'}
+        </button>
+      )}
     </div>
   )
 }

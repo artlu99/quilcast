@@ -35,12 +35,16 @@ export async function register(url: string, custody: Uint8Array, value: bigint) 
   const from = address(custody)
   const data = '0x' + sel('register(address)') + arg(from)
   const [nonce, gas, base, tip] = await Promise.all([
-    rpc(url, 'eth_getTransactionCount', [from, 'pending']),
+    rpc(url, 'eth_getTransactionCount', [from, 'latest']),
     rpc(url, 'eth_estimateGas', [{ from, to: ID_GATEWAY, data, value: '0x' + value.toString(16) }]),
     rpc(url, 'eth_gasPrice'),
     rpc(url, 'eth_maxPriorityFeePerGas'),
   ])
-  const fields: R[] = [10n, BigInt(nonce), BigInt(tip), BigInt(base) * 2n + BigInt(tip), (BigInt(gas) * 13n) / 10n, unhex(ID_GATEWAY), value, unhex(data), []]
+  const maxFee = BigInt(base) * 2n + BigInt(tip)
+  const limit = (BigInt(gas) * 13n) / 10n
+  // Optimism gas costs a tiny fraction of a gwei; refuse numbers a broken or hostile RPC might hand us
+  if (value > 10n ** 16n || maxFee > 10n ** 10n || limit > 2_000_000n) throw new Error('The Optimism RPC returned unexpected fees. Check the RPC in settings.')
+  const fields: R[] = [10n, BigInt(nonce), BigInt(tip), maxFee, limit, unhex(ID_GATEWAY), value, unhex(data), []]
     .map((f) => (typeof f === 'bigint' ? be(f) : f))
   const { rs, v } = ecSign(keccak_256(concat(Uint8Array.of(2), rlp(fields))), custody)
   const raw = concat(Uint8Array.of(2), rlp([...fields, be(v), be(BigInt('0x' + hex(rs.slice(0, 32)))), be(BigInt('0x' + hex(rs.slice(32))))]))

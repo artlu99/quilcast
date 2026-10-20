@@ -13,7 +13,7 @@ const save = (k: string, v: unknown) => localStorage.setItem(k, JSON.stringify(v
 export const settings = load('quilcast:settings', { node: 'https://haatz.quilibrium.com', rpc: 'https://mainnet.optimism.io', theme: 'system' })
 export const saveSettings = () => save('quilcast:settings', settings)
 
-export type Account = { phrase: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; done?: boolean }
+export type Account = { phrase: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean }
 const list = (k: string): Account[] => {
   try {
     return JSON.parse(localStorage.getItem(k) || '[]')
@@ -29,6 +29,9 @@ export let account: Account | null = accounts.find((a) => a.phrase === localStor
 
 /** Save `a` (added or updated, matched by phrase) and select it; `null` removes the selected account. */
 export const setAccount = (a: Account | null) => {
+  // re-read first: another tab may have added or removed accounts since this one loaded
+  const fresh = list('quilcast:accounts')
+  if (fresh.length || !legacy) accounts = fresh
   if (a) {
     const i = accounts.findIndex((x) => x.phrase === a.phrase)
     i < 0 ? accounts.push(a) : (accounts[i] = a)
@@ -39,6 +42,15 @@ export const setAccount = (a: Account | null) => {
   localStorage.removeItem('quilcast:account')
   dispatchEvent(new Event('account'))
 }
+// another tab changed the accounts: take its list, and start over if it signed this account out
+addEventListener('storage', (e) => {
+  if (e.key !== 'quilcast:accounts') return
+  accounts = list('quilcast:accounts')
+  const mine = account && accounts.find((x) => x.phrase === account!.phrase)
+  if (account && !mine) return location.assign('/')
+  account = mine || null
+  dispatchEvent(new Event('account'))
+})
 // a full reload is the simplest way to drop the previous account's feeds and likes
 export const switchAccount = (a: Account) => (localStorage.setItem('quilcast:current', a.phrase), location.assign('/'))
 
@@ -56,6 +68,17 @@ const TLDS = 'com|org|net|xyz|io|app|dev|ai|co|me|gg|so|sh|fm|tv|art|fun|lol|wtf
 export const LINK_RE = new RegExp(`https?:\\/\\/[^\\s<>"]+[^\\s<>".,;:!?)\\]'"]|(?<![@\\w.\\/-])(?:[a-z0-9-]+\\.)+(?:${TLDS})\\b(?:\\/[^\\s<>"]*[^\\s<>".,;:!?)\\]'"])?`, 'gi')
 export const toUrl = (s: string) => (/^https?:\/\//i.test(s) ? s : `https://${s}`)
 
+// URLs from casts, profiles and link previews are untrusted: Snapchain only checks their length, so
+// a "link" can be javascript:… or point at the viewer's own network. Only public http(s) gets through.
+const LOCAL = /^(localhost|.*\.localhost|.*\.local|0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[)/i
+export function safeUrl(u?: string | null) {
+  if (typeof u !== 'string') return
+  try {
+    const x = new URL(u)
+    if (/^https?:$/.test(x.protocol) && !x.username && !x.password && !LOCAL.test(x.hostname)) return x.href
+  } catch {}
+}
+
 export const USER_DATA = { PFP: 1, DISPLAY: 2, BIO: 3, URL: 5, USERNAME: 6 }
 
 export async function get<T = any>(path: string, q: Record<string, string | number | undefined> = {}): Promise<T> {
@@ -67,15 +90,27 @@ export async function get<T = any>(path: string, q: Record<string, string | numb
 
 export const fidByName = async (name: string) => (await get('/v2/farcaster/user/by-username', { username: name }).catch(() => null))?.user?.fid as number | undefined
 
-// what the signed-in user already liked/recast, so buttons render filled
+// what the signed-in user recently liked/recast, so buttons render filled; `mineVersion` bumps when it loads
 export const mine = { likes: new Set<string>(), recasts: new Set<string>() }
+export let mineVersion = 0
 const norm = (h: string) => h.replace(/^0x/, '').toLowerCase()
 export async function loadMine() {
-  if (!account?.fid) return
-  for (const [type, set] of [['Like', mine.likes], ['Recast', mine.recasts]] as const) {
-    const r = await get('/v1/reactionsByFid', { fid: account.fid, reaction_type: type, pageSize: 1000, reverse: 'true' }).catch(() => ({ messages: [] }))
-    for (const m of r.messages) m.data.reactionBody.targetCastId && set.add(norm(m.data.reactionBody.targetCastId.hash))
-  }
+  const fid = account?.fid
+  if (!fid) return
+  await Promise.all(
+    ([['Like', mine.likes], ['Recast', mine.recasts]] as const).map(async ([type, set]) => {
+      const r = await get('/v1/reactionsByFid', { fid, reaction_type: type, pageSize: 200, reverse: 'true' }).catch(() => ({ messages: [] }))
+      for (const m of r.messages) m.data?.reactionBody?.targetCastId && set.add(norm(m.data.reactionBody.targetCastId.hash))
+    }),
+  )
+  mineVersion++
+}
+
+/** The FID whose custody address this is: Hypersnap first (fast), Optimism when the node doesn't know it.
+ *  A wrong FID can't sign in anyway: the network only takes a key signed by that FID's custody address. */
+export async function fidForAddress(addr: string, rpcLookup: () => Promise<number>) {
+  const u = (await get('/v2/farcaster/user/custody-address', { custody_address: addr }).catch(() => null))?.user
+  return typeof u?.fid === 'number' && u.fid > 0 && String(u.custody_address).toLowerCase() === addr.toLowerCase() ? u.fid : rpcLookup()
 }
 export const isFollowing = async (target: number) =>
   !!account?.fid && (await fetch(`${settings.node}/v1/linkById?fid=${account.fid}&target_fid=${target}&link_type=follow`)).ok
@@ -112,6 +147,8 @@ export function castText(c: Cast) {
 
 // authors we've seen, so replies can say who they reply to
 export const users = new Map<number, User>()
+/** Casts this tab just sent, shown as "Posting…" until the node has indexed them. */
+export const posting = new Map<string, Cast>()
 export async function hydrateParents(casts: Cast[]) {
   for (const c of casts) users.set(c.author.fid, c.author)
   const missing = [...new Set(casts.map((c) => c.parent_author?.fid).filter((f): f is number => !!f && !users.has(f)))]

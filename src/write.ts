@@ -1,13 +1,24 @@
 // Signed writes: everything here needs the account's keys.
 import { ed25519 } from '@noble/curves/ed25519.js'
-import { HDKey } from '@scure/bip32'
-import { mnemonicToSeedSync } from '@scure/bip39'
-import { account, fidByName, LINK_RE, setAccount, settings, toUrl } from './api.ts'
 import { keccak_256 } from '@noble/hashes/sha3.js'
-import { castBody, castRemoveBody, concat, ecSign, envelope, followBody, hex, keyAdd, mentions, MT, reactionBody, unhex, userDataBody, type CastRef } from './fc.ts'
+import { HDKey } from '@scure/bip32'
+import { account, fidByName, LINK_RE, posting, setAccount, settings, toUrl, users, type Account, type Cast } from './api.ts'
+import { castBody, castRemoveBody, concat, ecSign, envelope, followBody, hex, keyAdd, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef } from './fc.ts'
 
-/** Custody key the same way Warpcast and Quorum derive it, so phrases move between apps. */
-export const custodyKey = (phrase: string) => HDKey.fromMasterSeed(mnemonicToSeedSync(phrase.trim().toLowerCase())).derive("m/44'/60'/0'/0/0").privateKey!
+const keys = new Map<string, Promise<Uint8Array>>()
+/** Custody key derived the way Warpcast and Quorum do it (BIP-39 seed, m/44'/60'/0'/0/0), so phrases
+ *  move between apps. The seed's PBKDF2 runs in WebCrypto: native, async, and cached per phrase. */
+export function custodyKey(phrase: string) {
+  const p = phrase.trim().toLowerCase().split(/\s+/).join(' ').normalize('NFKD')
+  if (!keys.has(p))
+    keys.set(p, (async () => {
+      const enc = new TextEncoder()
+      const key = await crypto.subtle.importKey('raw', enc.encode(p), 'PBKDF2', false, ['deriveBits'])
+      const seed = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-512', salt: enc.encode('mnemonic'), iterations: 2048 }, key, 512)
+      return HDKey.fromMasterSeed(new Uint8Array(seed)).derive("m/44'/60'/0'/0/0").privateKey!
+    })())
+  return keys.get(p)!
+}
 
 async function submit(m: { msg: Uint8Array; hash: string }) {
   const r = await fetch(`${settings.node}/v1/submitMessage`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: m.msg as BodyInit })
@@ -23,14 +34,20 @@ async function submit(m: { msg: Uint8Array; hash: string }) {
 }
 
 const TTL = 90 * 86400
-/** Make sure this browser holds a live Hypersnap signer for the account, adding or renewing one when needed. */
+/** Make sure this browser holds a live Hypersnap signer for the account, adding or renewing one when
+ *  needed. Older signers are re-issued once with the narrower permissions (same key). */
 export async function ensureSigner(a = account!) {
   const now = Math.floor(Date.now() / 1000)
-  if (a.signer && a.signerAt! + TTL - 7 * 86400 > now) return
+  if (a.signer && a.signerAt! + TTL - 7 * 86400 > now && a.scopes === SCOPES_VERSION) return
   const priv = a.signer ? unhex(a.signer) : ed25519.utils.randomSecretKey()
   const nonce = Math.max((a.nonce || 0) + 1, now)
-  await submit(keyAdd(a.fid!, custodyKey(a.phrase), priv, nonce))
-  setAccount({ ...a, signer: hex(priv), signerAt: now, nonce })
+  await submit(keyAdd(a.fid!, await custodyKey(a.phrase), priv, nonce))
+  setAccount({ ...a, signer: hex(priv), signerAt: now, nonce, scopes: SCOPES_VERSION })
+}
+
+/** Sign out: this browser's signer revokes itself, so a copy of the key stops working too. */
+export async function revokeSigner(a: Account) {
+  if (a.signer && a.fid) await submit(keyRemoveSelf(a.fid, unhex(a.signer), Math.floor(Date.now() / 1000)))
 }
 
 const send = async (type: number, body: Uint8Array) => {
@@ -43,7 +60,18 @@ export async function post(text: string, o: { parent?: CastRef; channel?: string
   const m = await mentions(text, fidByName)
   const embeds: (string | CastRef)[] = [...(o.media || []), ...(o.quote ? [o.quote] : [])]
   for (const u of new Set((m.text.match(LINK_RE) || []).map(toUrl))) embeds.length < 2 && embeds.push(u)
-  return send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
+  const hash = await send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
+  const c: Cast = {
+    hash, text, timestamp: new Date().toISOString(), author: users.get(account!.fid!) || { fid: account!.fid!, username: account!.username },
+    parent_hash: o.parent?.hash ?? null, parent_url: o.channel ?? null, parent_author: { fid: o.parent?.fid ?? null },
+    embeds: embeds.slice(0, 2).map((e) => (typeof e === 'string' ? { url: e } : { cast_id: e })),
+    reactions: { likes_count: 0, recasts_count: 0 }, replies: { count: 0 },
+  }
+  posting.set(hash, c)
+  // the next casts of a thread show under the first one too
+  const up = o.parent && posting.get(o.parent.hash)
+  if (up) up.direct_replies = [...(up.direct_replies || []), c]
+  return hash
 }
 
 const json = async (r: Response) => {
@@ -64,15 +92,22 @@ const put = (url: string, body: Blob, onSent: (n: number) => void) =>
 
 export type Progress = (stage: 'uploading' | 'processing', fraction?: number, secondsLeft?: number) => void
 
-/** Upload a file in chunks through our server, which passes it to Farcaster's CDN (or keeps it).
- *  Authorized by a farcaster.xyz token request signed with the custody key. Returns the embed URL. */
-export async function upload(file: Blob, progress: Progress = () => {}) {
-  const ts = Date.now()
-  const exp = ts + 3500e3
+// a farcaster.xyz login request signed with the custody key, valid for 10 minutes: the server checks who is
+// uploading with it and swaps it for the CDN token. Timestamps never repeat, because each one works only once.
+let lastLogin = 0
+async function login() {
+  const ts = (lastLogin = Math.max(Date.now(), lastLogin + 1))
+  const exp = ts + 600e3
   const authRequest = { method: 'generateToken', params: { timestamp: ts, expiresAt: exp } }
   const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${exp},"timestamp":${ts}}}`)
-  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), custodyKey(account!.phrase))
-  const headers = { 'content-type': file.type, authorization: `Bearer eip191:${btoa(String.fromCharCode(...rs, v + 27))}`, 'x-auth-request': JSON.stringify(authRequest), 'x-fid': String(account!.fid), 'x-size': String(file.size) }
+  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), await custodyKey(account!.phrase))
+  return { authorization: `Bearer eip191:${btoa(String.fromCharCode(...rs, v + 27))}`, 'x-auth-request': JSON.stringify(authRequest) }
+}
+
+/** Upload a file in chunks through our server, which passes it to Farcaster's CDN (or keeps it). Returns the embed URL. */
+export async function upload(original: Blob, progress: Progress = () => {}) {
+  const file = await scrub(original)
+  const headers = { 'content-type': file.type, ...(await login()), 'x-fid': String(account!.fid), 'x-size': String(file.size) }
   const { id, chunk: max } = await json(await fetch('/api/upload', { method: 'POST', headers }))
   progress('uploading', 0)
   // each request must finish well inside the proxy's 60 s, so chunks grow on fast links and shrink on slow ones
@@ -96,13 +131,75 @@ export async function upload(file: Blob, progress: Progress = () => {}) {
     }
   }
   progress('processing')
-  let st = await json(await fetch(`/api/upload/${id}/done`, { method: 'POST' }))
+  let st = await json(await fetch(`/api/upload/${id}/done`, { method: 'POST', headers: await login() }))
   while (st.state === 'sending' || st.state === 'processing') {
     await new Promise((r) => setTimeout(r, 1500))
     st = await json(await fetch(`/api/upload/${id}`))
   }
   if (st.state !== 'ready' || !st.url) throw new Error(st.error || 'Upload failed')
   return st.url as string
+}
+
+// --- nothing private leaves the device inside a file ---
+
+/** Photos are re-encoded (≤2048px JPEG) so EXIF/GPS is dropped; MP4/MOV lose their metadata boxes; GIFs and WebM go as-is. */
+async function scrub(file: Blob): Promise<Blob> {
+  if (/^image\/(jpeg|png|webp)$/.test(file.type)) return shrink(file)
+  if (/^video\/(mp4|quicktime)$/.test(file.type)) return stripVideoMeta(file)
+  return file
+}
+
+async function shrink(file: Blob): Promise<Blob> {
+  const img = await createImageBitmap(file)
+  const k = Math.min(1, 2048 / Math.max(img.width, img.height))
+  const c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) })
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, c.width, c.height)
+  ctx.drawImage(img, 0, 0, c.width, c.height)
+  return new Promise((r, e) => c.toBlob((b) => (b ? r(b) : e(new Error("Couldn't read that image"))), 'image/jpeg', 0.88))
+}
+
+const FREE = new Uint8Array([0x66, 0x72, 0x65, 0x65])
+const box = (b: Uint8Array, v: DataView, o: number, end: number) => {
+  let size = v.getUint32(o)
+  let hdr = 8
+  if (size === 1) (size = Number(v.getBigUint64(o + 8))), (hdr = 16)
+  else if (size === 0) size = end - o
+  return { size, hdr, type: String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]) }
+}
+// turn 'udta' (location, device) and 'meta' (iPhone keys/ilst) boxes into zeroed 'free' boxes inside moov and its tracks
+function scrubBoxes(b: Uint8Array, start: number, end: number) {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength)
+  for (let o = start; o + 8 <= end; ) {
+    const { size, hdr, type } = box(b, v, o, end)
+    if (size < hdr || o + size > end) return
+    if (type === 'udta' || type === 'meta') b.set(FREE, o + 4), b.fill(0, o + hdr, o + size)
+    else if (type === 'trak' || type === 'mdia' || type === 'minf') scrubBoxes(b, o + hdr, o + size)
+    o += size
+  }
+}
+/** Sizes and offsets stay the same, so the file plays exactly as before; the metadata bytes are gone, not just hidden. */
+export async function stripVideoMeta(file: Blob): Promise<Blob> {
+  const parts: BlobPart[] = []
+  let pos = 0
+  for (let off = 0; off + 8 <= file.size; ) {
+    const head = new Uint8Array(await file.slice(off, off + 16).arrayBuffer())
+    const { size, hdr, type } = box(head, new DataView(head.buffer), 0, file.size - off)
+    if (size < hdr) break
+    if (type === 'moov' && size < 64e6) {
+      const moov = new Uint8Array(await file.slice(off, off + size).arrayBuffer())
+      scrubBoxes(moov, hdr, moov.length)
+      parts.push(file.slice(pos, off), moov)
+      pos = off + size
+    } else if ((type === 'udta' || type === 'meta') && size < 64e6) {
+      parts.push(file.slice(pos, off + 4), FREE, new Uint8Array(size - 8))
+      pos = off + size
+    }
+    off += size
+  }
+  parts.push(file.slice(pos))
+  return new Blob(parts, { type: file.type })
 }
 
 export const deleteCast = (hash: string) => send(MT.CAST_REMOVE, castRemoveBody(hash))

@@ -10,16 +10,41 @@ import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, rename, rm, stat, truncate } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, statfs, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
+import { imageInfo } from './net.mjs'
 
-const FC = 'https://client.farcaster.xyz'
+const FC = process.env.FC_URL || 'https://client.farcaster.xyz'
 const FC_HEADERS = { origin: 'https://farcaster.xyz', referer: 'https://farcaster.xyz/', accept: 'application/json' }
 export const MEDIA = process.env.MEDIA_DIR || '/data/media'
 const TMP = join(MEDIA, '..', 'incoming')
 export const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' }
 const LIMIT = { image: 10e6, video: 100e6 }
 const CHUNK = 8 * 1024 * 1024
+// the volume shares the host disk with every other service, so local storage is capped hard
+const MAX_ACTIVE = 40, MAX_ACTIVE_PER_FID = 3, MAX_INCOMING = 2e9
+const DAILY_LOCAL_PER_FID = 300e6, MEDIA_CAP = 20e9, FREE_FLOOR = 40e9
+const known = (type) => typeof type === 'string' && Object.hasOwn(EXT, type)
+
+// the first bytes must match the declared type, so nothing else can be stored under a media name
+const MAGIC = {
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/png': (b) => b.length > 8 && b.readUInt32BE(0) === 0x89504e47,
+  'image/gif': (b) => /^GIF8[79]a/.test(b.toString('latin1', 0, 6)),
+  'image/webp': (b) => b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP',
+  'video/mp4': (b) => b.toString('latin1', 4, 8) === 'ftyp',
+  'video/quicktime': (b) => ['ftyp', 'moov', 'mdat', 'wide', 'free', 'skip'].includes(b.toString('latin1', 4, 8)),
+  'video/webm': (b) => b.length > 4 && b.readUInt32BE(0) === 0x1a45dfa3,
+}
+export function looksLike(type, b) {
+  if (!known(type) || !MAGIC[type](b)) return false
+  // images also get a pixel budget, so nobody can host a decompression bomb for viewers' browsers
+  if (type.startsWith('image/')) {
+    const info = imageInfo(b)
+    return !!info && info.type === type && info.w > 0 && info.h > 0 && info.w * info.h <= 100e6
+  }
+  return true
+}
 
 const canon = (o) => (o === null || typeof o !== 'object' ? JSON.stringify(o) : Array.isArray(o) ? `[${o.map(canon).join(',')}]` : `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(',')}}`)
 const fail = (status, message) => Object.assign(new Error(message), { status })
@@ -40,8 +65,8 @@ async function fcJson(path, token, init = {}) {
   return j.result
 }
 
-async function toCdn(job, body) {
-  const { kind, type, token } = job
+async function toCdn(job, body, token) {
+  const { kind, type } = job
   if (kind === 'image') {
     const { url } = await fcJson('/v1/generate-image-upload-url', token, { method: 'POST', body: '{}' })
     const form = new FormData()
@@ -71,40 +96,93 @@ async function toCdn(job, body) {
 
 // ponytail: jobs live in memory, so a deploy mid-upload loses them; the browser just shows the error
 const jobs = new Map()
+const quota = new Map() // fid -> { day, bytes } stored on our volume today
+const spent = new Map() // login requests already used, so a captured one can't be replayed
+let mediaBytes = 0
+readdir(MEDIA).then(async (names) => {
+  for (const n of names) mediaBytes += (await stat(join(MEDIA, n)).catch(() => ({ size: 0 }))).size
+}, () => {})
+const today = () => Math.floor(Date.now() / 86400e3)
+const used = (fid) => (quota.get(fid)?.day === today() ? quota.get(fid).bytes : 0)
+const active = (j) => j.state === 'receiving' || j.state === 'sending' || j.state === 'processing'
 setInterval(() => {
-  for (const [id, j] of jobs) if (Date.now() - j.at > 3600e3) jobs.delete(id), rm(j.file, { force: true })
-}, 600e3).unref()
+  const now = Date.now()
+  // finished jobs go after 10 minutes, abandoned ones after an hour
+  for (const [id, j] of jobs) if ((!active(j) && now - j.endedAt > 600e3) || now - j.at > 3600e3) jobs.delete(id), rm(j.file, { force: true }).catch(() => {})
+  for (const [fid, q] of quota) q.day !== today() && quota.delete(fid)
+  // a timestamp is accepted for 10 minutes either side of now, so a used one is remembered for longer than those 20
+  for (const [once, at] of spent) now - at > 1800e3 && spent.delete(once)
+}, 60e3).unref()
 
-/** POST /api/upload: verify who is uploading and decide where the file will go. */
-export async function start(req, { node }) {
-  const type = req.headers['content-type']
-  const kind = type?.split('/')[0]
-  if (!EXT[type]) throw fail(415, 'Use a JPEG, PNG, GIF, WebP, MP4, WebM or MOV file.')
-  const size = Number(req.headers['x-size'])
-  if (!(size > 0)) throw fail(400, 'missing size')
-  if (size > LIMIT[kind]) throw fail(413, `Files are limited to ${LIMIT[kind] / 1e6} MB.`)
-  let authRequest, fid
+// at most two files are read into memory and sent on at a time
+let sending = 0
+const queue = []
+const slot = async () => {
+  if (sending >= 2) await new Promise((r) => queue.push(r))
+  sending++
+}
+const release = () => (sending--, queue.shift()?.())
+
+/** Who signed the farcaster.xyz login request on `req` (it must be `fid`'s custody address). Each signature works once. */
+async function signedBy(req, fid, node) {
+  let authRequest
   try {
     authRequest = JSON.parse(req.headers['x-auth-request'])
-    fid = Number(req.headers['x-fid'])
   } catch {
     throw fail(400, 'missing auth')
   }
   const bearer = (req.headers.authorization || '').replace(/^Bearer /, '')
   const { timestamp, expiresAt } = authRequest?.params || {}
   if (authRequest?.method !== 'generateToken' || Math.abs(Date.now() - timestamp) > 600e3 || expiresAt - timestamp > 3600e3) throw fail(401, 'stale auth')
-  const user = await fetch(`${node}/v2/farcaster/user?fid=${fid}`).then((r) => (r.ok ? r.json() : null))
-  if (!user?.user?.custody_address || user.user.custody_address.toLowerCase() !== signerOf(authRequest, bearer)) throw fail(401, 'signature does not match this account')
-  // a farcaster.xyz token means the CDN will take it; no token (no Warpcast signer) means our volume
-  let token
+  let signer
+  try {
+    signer = signerOf(authRequest, bearer)
+  } catch {
+    throw fail(401, 'bad signature')
+  }
+  const user = await fetch(`${node}/v2/farcaster/user?fid=${fid}`, { signal: AbortSignal.timeout(8000) }).then((r) => (r.ok ? r.json() : null))
+  if (!user?.user?.custody_address || user.user.custody_address.toLowerCase() !== signer) throw fail(401, 'signature does not match this account')
+  // keyed on what was signed, not the signature bytes, which can be re-encoded (high s) into a new valid one
+  const once = `${signer}:${timestamp}`
+  if (spent.has(once)) throw fail(401, 'this signature was already used')
+  spent.set(once, Date.now())
+  return { signer, bearer, authRequest }
+}
+
+/** farcaster.xyz session token for a signed login request, or undefined. */
+async function fcToken({ bearer, authRequest }) {
   try {
     const r = await fetch(FC + '/v2/onboarding-state', { method: 'PUT', headers: { ...FC_HEADERS, 'content-type': 'application/json', authorization: `Bearer ${bearer}` }, body: JSON.stringify({ authRequest }), signal: AbortSignal.timeout(20000) })
-    token = (await r.json()).result?.token?.secret
-    if (token) await fcJson('/v1/generate-image-upload-url', token, { method: 'POST', body: '{}' }).catch((e) => e.message === 'missing_warpcast_signer' && (token = undefined))
+    return (await r.json()).result?.token?.secret
   } catch {}
+}
+
+/** POST /api/upload: verify who is uploading and decide where the file will go. */
+export async function start(req, { node }) {
+  const type = req.headers['content-type']
+  if (!known(type)) throw fail(415, 'Use a JPEG, PNG, GIF, WebP, MP4, WebM or MOV file.')
+  const kind = type.startsWith('image/') ? 'image' : 'video'
+  const size = Number(req.headers['x-size'])
+  if (!Number.isSafeInteger(size) || size <= 0) throw fail(400, 'missing size')
+  if (size > LIMIT[kind]) throw fail(413, `Files are limited to ${LIMIT[kind] / 1e6} MB.`)
+  const fid = Number(req.headers['x-fid'])
+  if (!Number.isSafeInteger(fid) || fid <= 0) throw fail(400, 'missing fid')
+  const auth = await signedBy(req, fid, node)
+  const mine = [...jobs.values()].filter(active)
+  if (mine.filter((j) => j.fid === fid).length >= MAX_ACTIVE_PER_FID) throw fail(429, 'Finish your other uploads first.')
+  if (mine.length >= MAX_ACTIVE || mine.reduce((n, j) => n + (j.state === 'receiving' ? j.size : 0), 0) + size > MAX_INCOMING) throw fail(503, 'Uploads are busy right now, try again in a minute.')
+  const disk = await statfs(join(MEDIA, '..')).catch(() => null)
+  if (!disk || disk.bavail * disk.bsize - size < FREE_FLOOR) throw fail(507, 'Upload storage is full right now.')
+  // a farcaster.xyz token means the CDN will take it; no token (no Warpcast signer) means our volume.
+  // The token is only a probe: the upload itself uses a fresh one from /done, so none is held while bytes arrive.
+  let cdn = false
+  const token = await fcToken(auth)
+  if (token) cdn = await fcJson('/v1/generate-image-upload-url', token, { method: 'POST', body: '{}' }).then(() => true, (e) => e.message !== 'missing_warpcast_signer')
+  // files we keep ourselves count against a daily allowance and a total cap
+  if (!cdn && (used(fid) + size > DAILY_LOCAL_PER_FID || mediaBytes + size > MEDIA_CAP)) throw fail(429, 'Upload limit reached for today.')
   const id = randomUUID()
   await mkdir(TMP, { recursive: true })
-  jobs.set(id, { id, kind, type, size, token, file: join(TMP, id), received: 0, state: 'receiving', at: Date.now() })
+  jobs.set(id, { id, fid, signer: auth.signer, kind, type, size, cdn, file: join(TMP, id), received: 0, state: 'receiving', at: Date.now() })
   return { id, chunk: CHUNK }
 }
 
@@ -113,6 +191,18 @@ export async function chunk(req, id, offset) {
   const job = jobs.get(id)
   if (!job || job.state !== 'receiving') throw fail(404, 'unknown upload')
   if (offset !== job.received) return { received: job.received }
+  // one chunk at a time per upload: two writers appending at once would interleave bytes
+  if (job.busy) throw fail(409, 'chunk already in progress')
+  job.busy = true
+  try {
+    return await append(req, job)
+  } finally {
+    job.busy = false
+    job.at = Date.now() // slow uploads stay alive while chunks keep arriving
+  }
+}
+
+async function append(req, job) {
   const out = createWriteStream(job.file, { flags: 'a' })
   let n = 0
   try {
@@ -131,29 +221,54 @@ export async function chunk(req, id, offset) {
   return { received: job.received }
 }
 
-/** POST /api/upload/<id>/done: process in the background; poll with GET. */
-export function done(id, { site }) {
+/** POST /api/upload/<id>/done: process in the background; poll with GET. CDN uploads sign in again here,
+ *  so the farcaster.xyz token only lives for the minutes the upload needs. */
+export async function done(req, id, { site, node }) {
   const job = jobs.get(id)
   if (!job || job.state !== 'receiving') throw fail(404, 'unknown upload')
   if (job.received !== job.size) throw fail(400, 'upload incomplete')
+  // ponytail: tabs loaded before 0.5.0 don't sign /done, so their files stay on our volume; drop this after a while
+  if (job.cdn && !req.headers['x-auth-request']) job.cdn = false
+  let token
+  if (job.cdn) {
+    const auth = await signedBy(req, job.fid, node)
+    if (auth.signer !== job.signer) throw fail(401, 'signature does not match this upload')
+    token = await fcToken(auth)
+    if (!token) throw fail(502, "farcaster.xyz didn't accept the upload, try again")
+  }
+  // a second /done may have started while we were signing in
+  if (jobs.get(id) !== job || job.state !== 'receiving') throw fail(409, 'upload already finishing')
   job.state = 'sending'
   ;(async () => {
-    const body = await readFile(job.file)
-    if (job.token) job.url = await toCdn(job, body)
-    else {
-      const name = `${createHash('sha256').update(body).digest('hex').slice(0, 24)}.${EXT[job.type]}`
-      await mkdir(MEDIA, { recursive: true })
-      await rename(job.file, join(MEDIA, name))
-      job.url = `${site}/m/${name}`
+    await slot()
+    try {
+      const body = await readFile(job.file)
+      if (!looksLike(job.type, body)) throw fail(415, "That file doesn't look like the image or video it claims to be.")
+      if (job.cdn) job.url = await toCdn(job, body, token)
+      else {
+        if (used(job.fid) + body.length > DAILY_LOCAL_PER_FID || mediaBytes + body.length > MEDIA_CAP) throw fail(429, 'Upload limit reached for today.')
+        const name = `${createHash('sha256').update(body).digest('hex').slice(0, 24)}.${EXT[job.type]}`
+        await mkdir(MEDIA, { recursive: true })
+        await rename(job.file, join(MEDIA, name))
+        quota.set(job.fid, { day: today(), bytes: used(job.fid) + body.length })
+        mediaBytes += body.length
+        job.url = `${site}/m/${name}`
+      }
+      job.state = 'ready'
+    } finally {
+      release()
     }
-    job.state = 'ready'
   })()
     .catch((e) => {
-      console.error('upload', id, e)
+      if (!e.status) console.error('upload', id, e)
       job.state = 'failed'
       job.error = e.status ? e.message : 'Upload failed'
     })
-    .finally(() => rm(job.file, { force: true }))
+    .finally(() => {
+      token = undefined
+      job.endedAt = Date.now()
+      return rm(job.file, { force: true }).catch(() => {})
+    })
   return status(id)
 }
 

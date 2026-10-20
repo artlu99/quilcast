@@ -7,11 +7,11 @@ Live at **[quilcast.com](https://quilcast.com)**.
 ## What it does
 
 - Following and trending feeds (top-level casts), threads with their parent casts, profiles with separate casts and replies tabs
-- Notifications: grouped likes, recasts and follows plus replies and mentions, with an unread dot
+- Notifications: grouped likes, recasts and follows plus replies, mentions and quotes, with an unread dot
 - Several accounts per browser, switched from the account menu (bottom left) or Settings
 - Rich link previews (Open Graph and Farcaster mini app images) through `/api/unfurl`, and @mention autocomplete in the composer
 - Search for people and for cast text
-- Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel
+- Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel. A new cast shows as "Posting…" until the network has indexed it
 - Attach up to two photos or videos per cast. Photos are re-encoded in the browser (≤2048 px JPEG, no EXIF). Uploads go through `/api/upload` to Farcaster's CDN the way Quorum does it, using a 10-minute farcaster.xyz token the browser signs with your custody key. Farcaster only gives upload URLs to accounts that have a Warpcast signer, so other accounts' files are stored on the server and served from `/m/<hash>`
 - HLS video plays natively where the browser supports it and through hls.js (loaded on first play) in Firefox-based browsers
 - Create a new account: a recovery phrase is generated locally, you send about $0.20 of ETH on Optimism to it, and Quilcast registers the FID with `IdGateway.register`, adds a gasless Hypersnap signer (`KEY_ADD`) and claims your fname
@@ -46,5 +46,13 @@ npm run build && npm start   # production server on :3000
 ```
 
 Your recovery phrase is stored unencrypted in this browser's `localStorage`. Anyone with access to your browser profile can take over the account, so treat it like a hot wallet.
+
+## Security
+
+- Keys never leave the browser. Pages are served with a strict CSP (`script-src 'self'`, no inline styles, no framing) and `Referrer-Policy: no-referrer`.
+- Links in casts and previews are untrusted, because the network only checks their length. Only public http(s) URLs get rendered.
+- The server's own fetches (link previews, card images, video posters) only reach public hosts on ports 80 and 443. Every address is checked at connect time and again on each redirect, and size, time and pixel limits apply.
+- Signers get only the permissions Quilcast uses (casts, reactions, follows, profile), and they revoke themselves on sign-out.
+- Before upload, photos are re-encoded and MP4/MOV metadata (location, device) is wiped. Uploads stored on the server are checked against their claimed type and served inert (`sandbox` CSP). Each signed upload request works only once.
 
 Production runs from the `Dockerfile` on Easypanel.

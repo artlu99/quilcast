@@ -5,19 +5,6 @@ import { Avatar, channelUrl, handle, Icon, LinkCard, P, QuoteCard, toast, w } fr
 type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string; stage?: 'uploading' | 'processing'; pct?: number; left?: number }
 const bytes = (s: string) => new TextEncoder().encode(s).length
 
-// photos are re-encoded (≤2048px JPEG) so EXIF/GPS never leaves the device; GIFs and videos go as-is
-async function shrink(file: File): Promise<Blob> {
-  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file
-  const img = await createImageBitmap(file)
-  const k = Math.min(1, 2048 / Math.max(img.width, img.height))
-  const c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) })
-  const ctx = c.getContext('2d')!
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, c.width, c.height)
-  ctx.drawImage(img, 0, 0, c.width, c.height)
-  return new Promise((r) => c.toBlob((b) => r(b || file), 'image/jpeg', 0.88))
-}
-
 function ChannelPicker({ value, set }: { value?: string; set: (v?: string) => void }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -162,8 +149,9 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
       const a: Attachment = { id: Math.random(), preview: URL.createObjectURL(file), video: file.type.startsWith('video/') }
       const patch = (p: Partial<Attachment>) => update(part.id, (x) => ({ files: x.files.map((f) => (f.id === a.id ? { ...f, ...p } : f)) }))
       update(part.id, (x) => ({ files: [...x.files, a] }))
-      shrink(file)
-        .then(async (blob) => (await w()).upload(blob, (stage, f, secs) => patch({ stage, pct: f === undefined ? undefined : Math.round(f * 100), left: secs })))
+      // upload() strips EXIF/GPS and video metadata before anything leaves the device
+      w()
+        .then((m) => m.upload(file, (stage, f, secs) => patch({ stage, pct: f === undefined ? undefined : Math.round(f * 100), left: secs })))
         .then((url) => patch({ url }), (e) => patch({ err: e.message }))
     }
   }
