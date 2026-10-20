@@ -1,9 +1,11 @@
 // Serves the built app from dist/ and gives cast and profile pages real meta tags,
 // plus a rendered 1200×630 card per cast at /og/c/<hash>.png, so shared links unfurl.
 import { Resvg } from '@resvg/resvg-js'
-import { readFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize } from 'node:path'
+import { EXT, MEDIA, upload } from './upload.mjs'
 
 const NODE = process.env.NODE_URL || 'https://haatz.quilibrium.com'
 const SITE = process.env.SITE_URL || 'https://quilcast.com'
@@ -110,6 +112,25 @@ createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname)
   try {
     if (path === '/health') return res.end('ok')
+    if (path === '/api/upload' && req.method === 'POST') {
+      const url = await upload(req, { node: NODE, site: SITE }).catch((e) => e)
+      const err = url instanceof Error
+      if (err && !url.status) console.error('upload', url)
+      return res.writeHead(err ? url.status || 500 : 200, { 'content-type': 'application/json' }).end(JSON.stringify(err ? { error: url.status ? url.message : 'Upload failed' } : { url }))
+    }
+    const media = path.match(/^\/m\/([0-9a-f]{24}\.(\w+))$/)
+    if (media) {
+      const file = join(MEDIA, media[1])
+      const size = (await stat(file).catch(() => null))?.size
+      if (!size) return res.writeHead(404).end()
+      const type = Object.keys(EXT).find((t) => EXT[t] === media[2])
+      // byte ranges so browsers can seek in videos
+      const range = req.headers.range?.match(/bytes=(\d*)-(\d*)/)
+      const start = range ? Number(range[1] || 0) : 0
+      const end = range && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1
+      res.writeHead(range ? 206 : 200, { 'content-type': type, 'content-length': end - start + 1, 'accept-ranges': 'bytes', 'cache-control': 'public, max-age=31536000, immutable', ...(range && { 'content-range': `bytes ${start}-${end}/${size}` }) })
+      return createReadStream(file, { start, end }).pipe(res)
+    }
     const og = path.match(/^\/og\/c\/(?:0x)?([0-9a-f]{40})\.png$/i)
     if (og) {
       const hash = og[1].toLowerCase()

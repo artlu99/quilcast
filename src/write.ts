@@ -3,7 +3,8 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { HDKey } from '@scure/bip32'
 import { mnemonicToSeedSync } from '@scure/bip39'
 import { account, fidByName, setAccount, settings } from './api.ts'
-import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, mentions, MT, reactionBody, unhex, userDataBody } from './fc.ts'
+import { keccak_256 } from '@noble/hashes/sha3.js'
+import { castBody, castRemoveBody, concat, ecSign, envelope, followBody, hex, keyAdd, mentions, MT, reactionBody, unhex, userDataBody, type CastRef } from './fc.ts'
 
 /** Custody key the same way Warpcast and Quorum derive it, so phrases move between apps. */
 export const custodyKey = (phrase: string) => HDKey.fromMasterSeed(mnemonicToSeedSync(phrase.trim().toLowerCase())).derive("m/44'/60'/0'/0/0").privateKey!
@@ -38,9 +39,26 @@ const send = async (type: number, body: Uint8Array) => {
 }
 
 const URL_RE = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'"]/g
-export async function post(text: string, parent?: { fid: number; hash: string }) {
+/** A cast can carry two embeds: uploads and a quoted cast first, then links from the text. */
+export async function post(text: string, o: { parent?: CastRef; channel?: string; quote?: CastRef; media?: string[] } = {}) {
   const m = await mentions(text, fidByName)
-  return send(MT.CAST_ADD, castBody({ ...m, parent, embeds: [...new Set(m.text.match(URL_RE) || [])].slice(0, 2) }))
+  const embeds: (string | CastRef)[] = [...(o.media || []), ...(o.quote ? [o.quote] : [])]
+  for (const u of new Set(m.text.match(URL_RE) || [])) embeds.length < 2 && embeds.push(u)
+  return send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
+}
+
+/** Upload a file through our server to Farcaster's CDN (or our own storage), authorized by a
+ *  10-minute farcaster.xyz token request signed with the custody key. Returns the embed URL. */
+export async function upload(file: Blob) {
+  const ts = Date.now()
+  const authRequest = { method: 'generateToken', params: { timestamp: ts, expiresAt: ts + 600e3 } }
+  const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${ts + 600e3},"timestamp":${ts}}}`)
+  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), custodyKey(account!.phrase))
+  const bearer = 'eip191:' + btoa(String.fromCharCode(...rs, v + 27))
+  const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type, authorization: `Bearer ${bearer}`, 'x-auth-request': JSON.stringify(authRequest), 'x-fid': String(account!.fid) }, body: file })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || !j.url) throw new Error(j.error || `Upload failed (${r.status})`)
+  return j.url as string
 }
 
 export const deleteCast = (hash: string) => send(MT.CAST_REMOVE, castRemoveBody(hash))

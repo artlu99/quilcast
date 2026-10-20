@@ -6,11 +6,16 @@ Live at **[quilcast.com](https://quilcast.com)**.
 
 ## What it does
 
-- Trending and following feeds, threads, profiles
-- Cast, reply, like, recast, follow, delete your own casts, edit your profile
+- Following and trending feeds, threads with their parent casts, profiles with casts and replies
+- Search for people and for cast text
+- Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel
+- Attach up to two photos or videos per cast. Photos are re-encoded in the browser (≤2048 px JPEG, no EXIF). Uploads go through `/api/upload` to Farcaster's CDN the way Quorum does it, using a 10-minute farcaster.xyz token the browser signs with your custody key. Farcaster only gives upload URLs to accounts that have a Warpcast signer, so other accounts' files are stored on the server and served from `/m/<hash>`
+- HLS video plays natively where the browser supports it and through hls.js (loaded on first play) in Firefox-based browsers
 - Create a new account: a recovery phrase is generated locally, you send about $0.20 of ETH on Optimism to it, and Quilcast registers the FID with `IdGateway.register`, adds a gasless Hypersnap signer (`KEY_ADD`) and claims your fname
 - Sign in with an existing recovery phrase (the same derivation as Warpcast and Quorum, so phrases work across apps)
-- Settings for the node URL, Optimism RPC and theme
+- Settings: profile (with photo upload), theme, recovery phrase and key export, node and Optimism RPC URLs, version
+
+Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list a channel's casts newest-first yet.
 
 ## How it fits together
 
@@ -21,7 +26,8 @@ Live at **[quilcast.com](https://quilcast.com)**.
 | `src/api.ts` | Hypersnap reads and the locally stored account |
 | `src/write.ts` | Signed writes, loaded on demand so readers don't download the crypto |
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
-| `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, and renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg |
+| `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
+| `server/upload.mjs` | `/api/upload`: Farcaster CDN relay with a local fallback |
 
 The message encoders are checked byte for byte against `@farcaster/core`, `viem` and Quilibrium's `quorum-shared`.
 
@@ -29,6 +35,7 @@ The message encoders are checked byte for byte against `@farcaster/core`, `viem`
 
 ```sh
 npm install
+PORT=3311 npm start   # API for uploads, after npm run build
 npm run dev
 npm test
 npm run build && npm start   # production server on :3000

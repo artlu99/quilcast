@@ -48,8 +48,17 @@ const castId = (fid: number, hash: string) => pb([1, fid], [2, unhex(hash)])
 const BODY_FIELD: Record<number, number> = { 1: 5, 2: 6, 3: 7, 4: 7, 5: 14, 6: 14, 11: 12, 16: 19 }
 const FC_EPOCH = 1609459200
 
-export const castBody = (c: { text: string; mentions?: number[]; positions?: number[]; embeds?: string[]; parent?: { fid: number; hash: string } }) =>
-  pb([2, c.mentions], [3, c.parent && castId(c.parent.fid, c.parent.hash)], [4, c.text], [5, c.positions], ...(c.embeds || []).map((u): Field => [6, pb([1, u])]))
+export type CastRef = { fid: number; hash: string }
+// parent is a cast (reply) or a channel URL; embeds are URLs or a quoted cast
+export const castBody = (c: { text: string; mentions?: number[]; positions?: number[]; embeds?: (string | CastRef)[]; parent?: CastRef | string }) =>
+  pb(
+    [2, c.mentions],
+    [3, typeof c.parent === 'object' ? castId(c.parent.fid, c.parent.hash) : undefined],
+    [7, typeof c.parent === 'string' ? c.parent : undefined], // same position as @farcaster/core's oneof
+    [4, c.text],
+    [5, c.positions],
+    ...(c.embeds || []).map((e): Field => [6, typeof e === 'string' ? pb([1, e]) : pb([2, castId(e.fid, e.hash)])]),
+  )
 export const reactionBody = (type: 1 | 2, fid: number, hash: string) => pb([1, type], [2, castId(fid, hash)])
 export const followBody = (fid: number) => pb([1, 'follow'], [3, fid])
 export const userDataBody = (type: number, value: string) => pb([1, type], [2, value])

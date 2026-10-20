@@ -53,3 +53,22 @@ export async function loadMine() {
 }
 export const isFollowing = async (target: number) =>
   !!account?.fid && (await fetch(`${settings.node}/v1/linkById?fid=${account.fid}&target_fid=${target}&link_type=follow`)).ok
+
+export type User = { fid: number; username?: string; display_name?: string; pfp_url?: string; profile?: { bio?: { text?: string } }; follower_count?: number; following_count?: number }
+export type Cast = {
+  hash: string; text: string; timestamp: string; author: User; parent_hash?: string | null; parent_url?: string | null; parent_author?: { fid: number | null }
+  embeds: { url?: string; cast_id?: { fid: number; hash: string } }[]
+  reactions: { likes_count: number; recasts_count: number }; replies: { count: number }; direct_replies?: Cast[]
+}
+
+// authors we've seen, so replies can say who they reply to
+export const users = new Map<number, User>()
+export async function hydrateParents(casts: Cast[]) {
+  for (const c of casts) users.set(c.author.fid, c.author)
+  const missing = [...new Set(casts.map((c) => c.parent_author?.fid).filter((f): f is number => !!f && !users.has(f)))]
+  if (missing.length) {
+    const r = await get('/v2/farcaster/user/bulk', { fids: missing.slice(0, 100).join(',') }).catch(() => ({ users: [] }))
+    for (const u of r.users) users.set(u.fid, u)
+  }
+  return casts
+}
