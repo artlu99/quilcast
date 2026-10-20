@@ -269,8 +269,6 @@ a.searchbox:hover { text-decoration: none; border-color: var(--line); }
 .field { display: block; margin-top: 8px; }
 .field > span { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
 .actions { display: flex; justify-content: flex-end; margin-top: 10px; }
-details summary { cursor: pointer; font-weight: 700; list-style-position: inside; }
-details[open] summary { margin-bottom: 4px; }
 .seg { display: inline-flex; padding: 3px; background: var(--soft); border-radius: 99px; }
 .seg button { border: 0; background: none; padding: 5px 13px; border-radius: 99px; font-weight: 600; font-size: 14px; color: var(--muted); }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); }

@@ -345,11 +345,9 @@ function Settings() {
           </section>
         )}
         <section>
-          <details>
-            <summary>Network</summary>
-            <label class="field"><span>Hypersnap node</span><input value={settings.node} onChange={(e) => ((settings.node = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
-            <label class="field"><span>Optimism RPC</span><input value={settings.rpc} onChange={(e) => ((settings.rpc = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
-          </details>
+          <h2>Network</h2>
+          <label class="field"><span>Hypersnap node</span><input value={settings.node} onChange={(e) => ((settings.node = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
+          <label class="field"><span>Optimism RPC</span><input value={settings.rpc} onChange={(e) => ((settings.rpc = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
         </section>
         <p class="foot">Quilcast v{__VERSION__} · <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">Source</a></p>
       </div>
@@ -409,7 +407,7 @@ function App() {
       <nav class="side" aria-label="Main">
         <a class="brand" href="/"><Logo size={30} /><span>Quilcast</span></a>
         {nav.filter(([k]) => k !== 'join').map(([k, label, d]) => <a class={`navlink${active(k) ? ' on' : ''}`} href={href(k)}><Icon d={d} size={22} /><span>{label}</span></a>)}
-        {me ? <button class="btn cast-btn" onClick={() => setCompose({})}><Icon d={P.pen} /><span>Cast</span></button> : <a class="btn cast-btn" href="/join"><span>Join</span></a>}
+        {me ? <button class="btn cast-btn" onClick={() => setCompose({})}><Icon d={P.pen} /><span>Cast</span></button> : <a class="btn cast-btn" href="/join" aria-label="Join"><Icon d={P.user} /><span>Join</span></a>}
         {me && (
           <a class="me" href={userPath(me)}>
             <Avatar u={me} size={34} link={false} />
