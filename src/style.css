@@ -93,7 +93,7 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 @media (max-width: 1099px) {
   .extra { display: none; }
   .side { width: 76px; align-items: center; }
-  .side .brand span, .navlink span, .cast-btn span, .me > span:not(.avatar) { display: none; }
+  .side .brand span, .navlink > span:not(.ico), .cast-btn span, .me > span:not(.avatar) { display: none; }
   .brand { padding: 10px 0 14px; }
   .cast-btn { width: 52px; height: 52px; padding: 0; border-radius: 99px; }
   .me { padding: 6px; }
