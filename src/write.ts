@@ -2,7 +2,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { HDKey } from '@scure/bip32'
 import { mnemonicToSeedSync } from '@scure/bip39'
-import { account, fidByName, setAccount, settings } from './api.ts'
+import { account, fidByName, LINK_RE, setAccount, settings, toUrl } from './api.ts'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { castBody, castRemoveBody, concat, ecSign, envelope, followBody, hex, keyAdd, mentions, MT, reactionBody, unhex, userDataBody, type CastRef } from './fc.ts'
 
@@ -38,12 +38,11 @@ const send = async (type: number, body: Uint8Array) => {
   return submit(envelope(type, account!.fid!, body, unhex(account!.signer!)))
 }
 
-const URL_RE = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'"]/g
 /** A cast can carry two embeds: uploads and a quoted cast first, then links from the text. */
 export async function post(text: string, o: { parent?: CastRef; channel?: string; quote?: CastRef; media?: string[] } = {}) {
   const m = await mentions(text, fidByName)
   const embeds: (string | CastRef)[] = [...(o.media || []), ...(o.quote ? [o.quote] : [])]
-  for (const u of new Set(m.text.match(URL_RE) || [])) embeds.length < 2 && embeds.push(u)
+  for (const u of new Set((m.text.match(LINK_RE) || []).map(toUrl))) embeds.length < 2 && embeds.push(u)
   return send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
 }
 

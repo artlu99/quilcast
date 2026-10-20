@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, castText, get, go, mine, users, type Cast, type User } from './api.ts'
+import { account, castText, get, go, LINK_RE, mine, toUrl, users, type Cast, type User } from './api.ts'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -68,14 +68,14 @@ export const Avatar = ({ u, size = 40, link = true }: { u: User; size?: number; 
 
 // links, @mentions and /channels inside cast text
 export function RichText({ text, class: cls = 'text' }: { text: string; class?: string }) {
-  const parts = text.split(/(https?:\/\/[^\s]+|(?<![\w/])@[a-z0-9][a-z0-9.-]*[a-z0-9]|(?<![\w/:])\/[a-z0-9-]{2,}(?![\w/]))/gi)
+  const parts = text.split(new RegExp(`(${LINK_RE.source}|(?<![\\w/])@[a-z0-9][a-z0-9.-]*[a-z0-9]|(?<![\\w/:])\\/[a-z0-9-]{2,}(?![\\w/]))`, 'gi'))
   return (
     <p class={cls}>
       {parts.map((p, i) =>
         i % 2 === 0 ? p
           : p[0] === '@' ? <a key={i} href={`/u/${p.slice(1)}`} onClick={stop}>{p}</a>
             : p[0] === '/' ? <span key={i} class="chan-ref">{p}</span>
-              : <a key={i} href={p} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}{p.replace(/^https?:\/\/(www\.)?/, '').length > 40 ? '…' : ''}</a>,
+              : <a key={i} href={toUrl(p)} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}{p.replace(/^https?:\/\/(www\.)?/, '').length > 40 ? '…' : ''}</a>,
       )}
     </p>
   )

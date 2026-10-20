@@ -34,3 +34,14 @@ test('castText puts mentions back at their byte offsets', async () => {
   const c = { text: 'hé  and ', mentioned_profiles: [{ fid: 1, username: 'a' }, { fid: 2, username: 'b.eth' }], mentioned_profiles_ranges: [{ start: 4, end: 4 }, { start: 9, end: 9 }] } as any
   assert.equal(castText(c), 'hé @a and @b.eth')
 })
+
+test('LINK_RE finds links people type, with or without a scheme', async () => {
+  ;(globalThis as any).localStorage = { getItem: () => null, setItem() {}, removeItem() {} }
+  const { LINK_RE } = await import('./api.ts')
+  const m = (s: string) => s.match(LINK_RE) || []
+  assert.deepEqual(m('yeah, quilcast.com, getting the launch video ready'), ['quilcast.com'])
+  assert.deepEqual(m('see https://a.b/c?d=1.'), ['https://a.b/c?d=1'])
+  assert.deepEqual(m('try x.com/foo/bar. ok'), ['x.com/foo/bar'])
+  assert.deepEqual(m('@bob.eth and mail me at a@b.com, e.g. node.js'), [])
+  assert.deepEqual(m('docs.github.io and sub.quilcast.com'), ['docs.github.io', 'sub.quilcast.com'])
+})

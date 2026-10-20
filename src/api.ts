@@ -51,6 +51,11 @@ export const go = (path: string) => {
 // leave the app only if we arrived on this page from outside it
 export const back = () => (depth > 0 ? (depth--, history.back()) : go('/'))
 
+// links as people write them: with a scheme, or a bare domain on a common TLD ("quilcast.com/x")
+const TLDS = 'com|org|net|xyz|io|app|dev|ai|co|me|gg|so|sh|fm|tv|art|fun|lol|wtf|info|page|site|tech|link|to|us|uk|de|fr|eu|ca|ly|cc|club|blog|news|social|world|live|studio|games|finance|money|cash|network|systems|build|tools'
+export const LINK_RE = new RegExp(`https?:\\/\\/[^\\s<>"]+[^\\s<>".,;:!?)\\]'"]|(?<![@\\w.\\/-])(?:[a-z0-9-]+\\.)+(?:${TLDS})\\b(?:\\/[^\\s<>"]*[^\\s<>".,;:!?)\\]'"])?`, 'gi')
+export const toUrl = (s: string) => (/^https?:\/\//i.test(s) ? s : `https://${s}`)
+
 export const USER_DATA = { PFP: 1, DISPLAY: 2, BIO: 3, URL: 5, USERNAME: 6 }
 
 export async function get<T = any>(path: string, q: Record<string, string | number | undefined> = {}): Promise<T> {
