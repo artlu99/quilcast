@@ -2,7 +2,7 @@
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { address, concat, ecSign, hex, unhex } from './fc.ts'
 
-const ID_GATEWAY = '0x00000000fc25870c6ed6b6c7e41fb078b7656f69'
+export const ID_GATEWAY = '0x00000000fc25870c6ed6b6c7e41fb078b7656f69'
 const ID_REGISTRY = '0x00000000fc6c5f01fc30151999387bb99a9f489b'
 
 export async function rpc(url: string, method: string, params: unknown[] = []) {
@@ -30,10 +30,13 @@ export const rlp = (x: R): Uint8Array =>
     ? ((p) => concat(len(p.length, 0xc0), p))(concat(...x.map(rlp)))
     : x.length === 1 && x[0] < 0x80 ? x : concat(len(x.length, 0x80), x)
 
-/** Call IdGateway.register(recovery = self) from the custody key, paying `value`. Returns the tx hash. */
+/** Calldata for IdGateway.register(recovery = the custody address itself). */
+export const registerData = (custody: string) => `0x${sel('register(address)')}${arg(custody)}` as const
+
+/** Call IdGateway.register from the custody key, paying `value`. Returns the tx hash. */
 export async function register(url: string, custody: Uint8Array, value: bigint) {
   const from = address(custody)
-  const data = '0x' + sel('register(address)') + arg(from)
+  const data = registerData(from)
   const [nonce, gas, base, tip] = await Promise.all([
     rpc(url, 'eth_getTransactionCount', [from, 'latest']),
     rpc(url, 'eth_estimateGas', [{ from, to: ID_GATEWAY, data, value: '0x' + value.toString(16) }]),

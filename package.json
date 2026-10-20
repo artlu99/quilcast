@@ -15,11 +15,12 @@
     "@scure/bip32": "2.4.0",
     "@scure/bip39": "2.4.0",
     "hls.js": "1.7.3",
-    "preact": "11.0.1"
+    "preact": "11.0.1",
+    "viem": "2.57.3"
   },
   "devDependencies": {
     "typescript": "7.0.2",
     "vite": "8.3.4"
   },
-  "version": "0.5.1"
+  "version": "0.6.0"
 }

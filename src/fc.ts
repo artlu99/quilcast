@@ -93,28 +93,48 @@ const sign65 = (digest: Uint8Array, priv: Uint8Array) => {
   return concat(rs, Uint8Array.of(v + 27))
 }
 
-const typed = (domain: Uint8Array, type: string, ...fields: Uint8Array[]) =>
-  keccak_256(concat(Uint8Array.of(0x19, 1), domain, keccak_256(concat(kstr(type), ...fields))))
-const domain = (name: string, chainId: number, contract?: string) =>
-  contract
-    ? keccak_256(concat(kstr('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'), kstr(name), kstr('1'), word(chainId), word(BigInt(contract))))
-    : keccak_256(concat(kstr('EIP712Domain(string name,string version,uint256 chainId)'), kstr(name), kstr('1'), word(chainId)))
+// EIP-712 for the flat structs Farcaster signs (no nested structs), so a key here and an external wallet
+// sign the very same object
+type Member = { name: string; type: string }
+export type Typed = { domain: { name: string; version: string; chainId: number; verifyingContract?: string }; types: Record<string, Member[]>; primaryType: string; message: Record<string, any> }
+const DOMAIN: Member[] = [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }]
+const enc = (type: string, v: any): Uint8Array =>
+  type.endsWith('[]') ? keccak_256(concat(...v.map((x: unknown) => enc(type.slice(0, -2), x))))
+    : type === 'string' ? kstr(v) : type === 'bytes' ? keccak_256(unhex(v)) : word(BigInt(v))
+const struct = (name: string, fields: Member[], v: Record<string, any>) =>
+  keccak_256(concat(kstr(`${name}(${fields.map((f) => `${f.type} ${f.name}`).join(',')})`), ...fields.map((f) => enc(f.type, v[f.name]))))
+export const hashTyped = (t: Typed) =>
+  keccak_256(concat(Uint8Array.of(0x19, 1), struct('EIP712Domain', DOMAIN.filter((f) => f.name in t.domain), t.domain), struct(t.primaryType, t.types[t.primaryType], t.message)))
+
+/** Whoever signs for the custody address: a key in this browser, or an external wallet. Signatures are 65 bytes, v = 27/28. */
+export type Custody = { address: string; typed: (t: Typed) => Promise<Uint8Array>; message: (m: Uint8Array) => Promise<Uint8Array> }
+export const keyCustody = (priv: Uint8Array): Custody => ({
+  address: address(priv),
+  typed: async (t) => sign65(hashTyped(t), priv),
+  message: async (m) => sign65(keccak_256(concat(utf8(`\x19Ethereum Signed Message:\n${m.length}`), m)), priv),
+})
+
+const KEY_ADD_DOMAIN = { name: 'Farcaster KeyAdd', version: '1', chainId: 1 }
+const n = (name: string, type: string) => ({ name, type })
 
 /** KEY_ADD that registers `signerPriv` for `fid` without an on-chain tx (Hypersnap gasless signers). */
-export function keyAdd(fid: number, custody: Uint8Array, signerPriv: Uint8Array, nonce: number) {
+export async function keyAdd(fid: number, custody: Custody, signerPriv: Uint8Array, nonce: number) {
   const key = ed25519.getPublicKey(signerPriv)
   // Farcaster-epoch seconds: Hypersnap checks the deadline against the message timestamp, which uses that epoch
   const deadline = Math.floor(Date.now() / 1000) - FC_EPOCH + 3600
   const ttl = 90 * 86400
-  const dom = domain('Farcaster KeyAdd', 1)
-  const skr = sign65(typed(dom, 'SignedKeyRequest(uint256 requestFid,bytes key,uint256 deadline)', word(fid), keccak_256(key), word(deadline)), custody)
+  const skr = await custody.typed({
+    domain: KEY_ADD_DOMAIN, primaryType: 'SignedKeyRequest',
+    types: { SignedKeyRequest: [n('requestFid', 'uint256'), n('key', 'bytes'), n('deadline', 'uint256')] },
+    message: { requestFid: fid, key: '0x' + hex(key), deadline },
+  })
   // abi.encode((uint256 requestFid, address requestSigner, bytes signature, uint256 deadline))
-  const metadata = concat(word(32), word(fid), word(BigInt(address(custody))), word(128), word(deadline), word(65), skr, new Uint8Array(31))
-  const custodySig = sign65(
-    typed(dom, 'KeyAdd(uint256 fid,bytes key,uint32 keyType,uint32[] scopes,uint32 ttl,uint32 nonce,uint256 deadline)',
-      word(fid), keccak_256(key), word(1), keccak_256(concat(...SCOPES.map(word))), word(ttl), word(nonce), word(deadline)),
-    custody,
-  )
+  const metadata = concat(word(32), word(fid), word(BigInt(custody.address)), word(128), word(deadline), word(65), skr, new Uint8Array(31))
+  const custodySig = await custody.typed({
+    domain: KEY_ADD_DOMAIN, primaryType: 'KeyAdd',
+    types: { KeyAdd: [n('fid', 'uint256'), n('key', 'bytes'), n('keyType', 'uint32'), n('scopes', 'uint32[]'), n('ttl', 'uint32'), n('nonce', 'uint32'), n('deadline', 'uint256')] },
+    message: { fid, key: '0x' + hex(key), keyType: 1, scopes: SCOPES, ttl, nonce, deadline },
+  })
   return envelope(MT.KEY_ADD, fid, pb([1, key], [2, 1], [3, custodySig], [4, deadline], [5, nonce], [6, metadata], [7, 1], [9, SCOPES], [10, ttl]), signerPriv)
 }
 
@@ -123,10 +143,14 @@ export const keyRemoveSelf = (fid: number, signerPriv: Uint8Array, nonce: number
   envelope(MT.KEY_REMOVE, fid, pb([1, ed25519.getPublicKey(signerPriv)], [3, 2], [4, Math.floor(Date.now() / 1000) - FC_EPOCH + 3600], [5, nonce]), signerPriv)
 
 /** Signature the fname server wants to assign `name` to the custody address. */
-export function fnameProof(name: string, timestamp: number, custody: Uint8Array) {
-  const owner = address(custody)
-  const dom = domain('Farcaster name verification', 1, '0xe3be01d99baa8db9905b33a3ca391238234b79d1')
-  return { owner, signature: '0x' + hex(sign65(typed(dom, 'UserNameProof(string name,uint256 timestamp,address owner)', kstr(name), word(timestamp), word(BigInt(owner))), custody)) }
+export async function fnameProof(name: string, timestamp: number, custody: Custody) {
+  const sig = await custody.typed({
+    domain: { name: 'Farcaster name verification', version: '1', chainId: 1, verifyingContract: '0xe3be01d99baa8db9905b33a3ca391238234b79d1' },
+    primaryType: 'UserNameProof',
+    types: { UserNameProof: [n('name', 'string'), n('timestamp', 'uint256'), n('owner', 'address')] },
+    message: { name, timestamp, owner: custody.address },
+  })
+  return { owner: custody.address, signature: '0x' + hex(sig) }
 }
 
 /** Turn "@alice hi" into mention-free text plus byte positions, resolving names via `lookup`. */

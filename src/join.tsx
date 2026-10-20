@@ -1,10 +1,10 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { account, fidForAddress, get, go, setAccount, settings, USER_DATA, type Account } from './api.ts'
 import { balance, fidOf, register, registerPrice } from './eth.ts'
 import { address, fnameProof } from './fc.ts'
-import { custodyKey, ensureSigner, setUserData } from './write.ts'
+import { custodyKey, custodyOf, ensureSigner, setUserData } from './write.ts'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const eth = (wei: bigint) => (Number(wei) / 1e18).toFixed(6).replace(/\.?0+$/, '')
@@ -22,10 +22,11 @@ const Steps = ({ steps, at }: { steps: string[]; at: number }) => (
 )
 
 export function Join() {
-  const [mode, setMode] = useState<'pick' | 'create' | 'signin'>('pick')
+  const [mode, setMode] = useState<'pick' | 'create' | 'signin' | 'wallet'>('pick')
   if (account && !account.done) return <Setup />
   if (mode === 'create') return <Create back={() => setMode('pick')} />
   if (mode === 'signin') return <SignIn back={() => setMode('pick')} />
+  if (mode === 'wallet') return <WalletIn back={() => setMode('pick')} />
   return (
     <div class="join">
       <h1>{account ? 'Add an account' : 'Join Farcaster on Hypersnap'}</h1>
@@ -38,11 +39,15 @@ export function Join() {
         <b>I already have an account</b>
         <span>Sign in with the recovery phrase from Warpcast, Quorum or any other Farcaster app.</span>
       </button>
+      <button class="choice" onClick={() => setMode('wallet')}>
+        <b>Use a wallet</b>
+        <span>Connect MetaMask, Rabby or another wallet that owns a Farcaster account, or create one paid from it. The wallet keeps its keys and you approve each signature.</span>
+      </button>
     </div>
   )
 }
 
-function Create({ back }: { back: () => void }) {
+function Create({ back, wallet }: { back: () => void; wallet?: string }) {
   const [name, setName] = useState('')
   const [display, setDisplay] = useState('')
   const [state, setState] = useState<'' | 'checking' | 'free' | 'taken' | 'bad'>('')
@@ -53,11 +58,12 @@ function Create({ back }: { back: () => void }) {
     const t = setTimeout(() => fetch(`https://fnames.farcaster.xyz/transfers/current?name=${name}`).then((r) => setState(r.status === 404 ? 'free' : 'taken'), () => setState('')), 350)
     return () => clearTimeout(t)
   }, [name])
-  const go = () => setAccount({ phrase: generateMnemonic(wordlist), username: name, display: display.trim() || name })
+  const go = () => setAccount({ phrase: wallet ? '' : generateMnemonic(wordlist), wallet, username: name, display: display.trim() || name })
   return (
     <div class="join">
       <button class="link-btn" onClick={back}>← Back</button>
       <h1>Pick your name</h1>
+      {wallet && <p class="lede">No Farcaster account belongs to {short(wallet)} yet. Pick a name and the wallet pays the registration on Optimism.</p>}
       <label>Username
         <div class="prefix"><span>@</span><input value={name} onInput={(e) => setName(e.currentTarget.value.toLowerCase().trim())} placeholder="yourname" maxLength={16} autoFocus autocapitalize="none" spellcheck={false} /></div>
         <small class={state === 'free' ? 'ok' : state === 'taken' || state === 'bad' ? 'warn' : ''}>
@@ -66,6 +72,46 @@ function Create({ back }: { back: () => void }) {
       </label>
       <label>Display name<input value={display} onInput={(e) => setDisplay(e.currentTarget.value)} placeholder="Your Name" maxLength={32} /></label>
       <button class="btn wide" disabled={state !== 'free'} onClick={go}>Continue</button>
+    </div>
+  )
+}
+
+const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
+
+const WALLET_IN = ['Connecting your wallet', 'Finding your Farcaster account', 'Two signatures in your wallet add a signing key for this browser', 'Loading your profile']
+function WalletIn({ back }: { back: () => void }) {
+  const [err, setErr] = useState('')
+  const [at, setAt] = useState(-1)
+  const [none, setNone] = useState('')
+  const go = async () => {
+    setErr('')
+    try {
+      setAt(0)
+      const addr = await (await import('./wallet.ts')).connect()
+      setAt(1)
+      const fid = await fidForAddress(addr, () => fidOf(settings.rpc, addr))
+      if (!fid) return setAt(-1), setNone(addr)
+      setAt(2)
+      const a = { phrase: '', wallet: addr, fid, done: true }
+      await ensureSigner(a)
+      setAt(3)
+      await finish(a)
+    } catch (e: any) {
+      setErr(e.message)
+      setAt(-1)
+    }
+  }
+  // a wallet without a Farcaster account can register one
+  if (none) return <Create back={() => setNone('')} wallet={none} />
+  const busy = at >= 0
+  return (
+    <div class="join">
+      <button class="link-btn" onClick={back}>← Back</button>
+      <h1>Use a wallet</h1>
+      <p class="lede">Connect the wallet that owns your Farcaster account. Quilcast never sees its keys: the wallet approves a signing key for this browser, and later asks again only to renew that key, claim a username or sign uploads.</p>
+      {err && <p class="warn">{err}</p>}
+      {busy && <section class="card"><Steps steps={WALLET_IN} at={at} /></section>}
+      <button class="btn wide" disabled={busy} onClick={go}>{busy ? 'Check your wallet…' : 'Connect wallet'}</button>
     </div>
   )
 }
@@ -120,13 +166,17 @@ function Setup() {
   const [err, setErr] = useState('')
   const [saved, setSaved] = useState(false)
   const [quit, setQuit] = useState(0)
+  const [price, setPrice] = useState(0n)
+  const [paying, setPaying] = useState(false)
+  const retry = useRef<() => void>(undefined)
 
   useEffect(() => {
     let live = true
     let sent = false
     ;(async () => {
-      const custody = await custodyKey(a.phrase)
-      const addr = address(custody)
+      const key = a.wallet ? undefined : await custodyKey(a.phrase)
+      const custody = await custodyOf(a)
+      const addr = custody.address
       setAddr(addr)
       while (live && !account!.fid) {
         try {
@@ -139,11 +189,13 @@ function Setup() {
           // ~0.0001 ETH today; anything far above that means a wrong or hostile RPC
           if (p <= 0n || p > 10n ** 16n) throw new Error('The registration price from the Optimism RPC looks wrong. Check the RPC in settings.')
           const want = (p * 102n) / 100n
+          setPrice(want)
           setNeed(want + 10n ** 13n)
           setBal(b)
-          if (b >= want + 10n ** 13n && !sent) {
+          // a phrase account pays as soon as the funds arrive; a wallet pays when its owner presses Register
+          if (key && b >= want + 10n ** 13n && !sent) {
             setStep('register')
-            await register(settings.rpc, custody, want)
+            await register(settings.rpc, key, want)
             sent = true
           }
         } catch (e: any) {
@@ -158,12 +210,15 @@ function Setup() {
       for (let i = 0; live; i++) {
         try {
           const acc = account!
+          // a wallet asks its owner for each signature, so ask only once the node knows the new FID
+          if (acc.wallet)
+            while (live && !(await get('/v2/farcaster/user', { fid: acc.fid }).then((r) => String(r.user?.custody_address).toLowerCase() === acc.wallet, () => false))) await sleep(3000)
           if (!acc.signer) await ensureSigner(acc)
           if (acc.username && !(await get('/v2/farcaster/user', { fid: acc.fid }).then((r) => r.user.username === acc.username, () => false))) {
             const proof = await fetch(`https://fnames.farcaster.xyz/transfers/current?name=${acc.username}`).then((r) => r.json())
             if (!proof.transfer || proof.transfer.to !== acc.fid) {
               const timestamp = Math.floor(Date.now() / 1000)
-              const r = await fetch('https://fnames.farcaster.xyz/transfers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: acc.username, from: 0, to: acc.fid, fid: acc.fid, timestamp, ...fnameProof(acc.username, timestamp, custody) }) })
+              const r = await fetch('https://fnames.farcaster.xyz/transfers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: acc.username, from: 0, to: acc.fid, fid: acc.fid, timestamp, ...(await fnameProof(acc.username, timestamp, custody)) }) })
               if (!r.ok) throw new Error(`Couldn't claim @${acc.username}: ${(await r.json().catch(() => ({}))).code || r.status}`)
             }
             await setUserData(USER_DATA.USERNAME, acc.username)
@@ -172,6 +227,13 @@ function Setup() {
           await finish(acc)
           return
         } catch (e: any) {
+          if (account!.wallet) {
+            // no automatic retries: each would ask the wallet again
+            setErr(e.message)
+            await new Promise<void>((r) => (retry.current = r))
+            setErr('')
+            continue
+          }
           // early attempts fail until the node indexes the new fid and fname, so stay quiet for a bit
           if (i > 6) setErr(e.message)
           await sleep(5000)
@@ -182,10 +244,30 @@ function Setup() {
   }, [])
 
   const copy = (s: string) => navigator.clipboard.writeText(s)
+  const pay = async () => {
+    setErr('')
+    setPaying(true)
+    try {
+      await (await import('./wallet.ts')).register(addr, price)
+      setStep('register')
+    } catch (e: any) {
+      setErr(e.message)
+    }
+    setPaying(false)
+  }
   return (
     <div class="join">
-      <h1>{step === 'fund' ? `Fund @${a.username}` : 'Setting up your account'}</h1>
-      {step === 'fund' && (
+      <h1>{step !== 'fund' ? 'Setting up your account' : a.wallet ? `Register @${a.username}` : `Fund @${a.username}`}</h1>
+      {step === 'fund' && a.wallet && (
+        <section class="card">
+          <p class="muted">Registering a Farcaster ID costs a small fee on Optimism, which includes a year of storage. Your wallet {short(a.wallet)} pays it, and then signs a key for this browser and your username.</p>
+          <div class="kv"><span>Fee</span><b>{need === null ? '…' : `${eth(price)} ETH`}</b></div>
+          <div class="kv"><span>Network</span><b>Optimism (OP Mainnet)</b></div>
+          {bal !== null && need !== null && bal < need && <p class="warn">The wallet has {eth(bal)} ETH on Optimism. It needs about {eth(need)} ETH including gas.</p>}
+          <button class="btn wide" disabled={need === null || paying} onClick={pay}>{paying ? 'Confirm in your wallet…' : 'Register'}</button>
+        </section>
+      )}
+      {step === 'fund' && !a.wallet && (
         <>
           <section class="card">
             <h2>1. Save your recovery phrase</h2>
@@ -214,11 +296,16 @@ function Setup() {
             <li class={step === 'register' ? 'now' : 'done'}>Registering your Farcaster ID on Optimism</li>
             <li class={step === 'setup' ? 'now' : ''}>Adding a signing key for this browser and claiming @{a.username}</li>
           </ol>
-          <p class="muted">This usually takes under a minute. You can keep this tab open or come back later, and Quilcast will pick up where it left off.</p>
+          <p class="muted">
+            {a.wallet ? 'Your wallet will ask for three signatures: two add the signing key and one claims the username. ' : ''}
+            This usually takes under a minute. You can keep this tab open or come back later, and Quilcast will pick up where it left off.
+          </p>
         </section>
       )}
       {err && <p class="warn">{err}</p>}
-      {step === 'fund' && bal === 0n && (
+      {err && a.wallet && step === 'setup' && <button class="btn wide" onClick={() => retry.current?.()}>Try again</button>}
+      {step === 'fund' && a.wallet && <button class="link-btn" onClick={() => setAccount(null)}>Start over</button>}
+      {step === 'fund' && !a.wallet && bal === 0n && (
         <button class="link-btn danger" onClick={() => (!quit ? setQuit(Date.now()) : Date.now() - quit > 1000 && setAccount(null))}>
           {quit ? 'Delete this recovery phrase? Only if you sent nothing to it' : 'Start over'}
         </button>

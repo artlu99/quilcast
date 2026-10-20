@@ -17,6 +17,7 @@ Live at **[quilcast.com](https://quilcast.com)**.
 - HLS video plays natively where the browser supports it and through hls.js (loaded on first play) in Firefox-based browsers
 - Create a new account: a recovery phrase is generated locally, you send about $0.20 of ETH on Optimism to it, and Quilcast registers the FID with `IdGateway.register`, adds a gasless Hypersnap signer (`KEY_ADD`) and claims your fname
 - Sign in with an existing recovery phrase (the same derivation as Warpcast and Quorum, so phrases work across apps)
+- Or use an external wallet (MetaMask, Rabby, OKX or whatever injects `window.ethereum`) as the custody address. The wallet signs the `KEY_ADD` (two EIP-712 signatures on chain 1), the fname proof and upload logins, and pays for registration on Optimism. Quilcast holds only the signer key it adds. viem drives the wallet and loads only when someone connects one
 - Settings: profile (with photo upload), theme, recovery phrase and key export, node and Optimism RPC URLs, version
 
 Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list a channel's casts newest-first yet.
@@ -29,6 +30,7 @@ Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list
 | `src/eth.ts` | Optimism JSON-RPC, RLP and EIP-1559 signing for the one registration transaction |
 | `src/api.ts` | Hypersnap reads and the locally stored account |
 | `src/write.ts` | Signed writes, loaded on demand so readers don't download the crypto |
+| `src/wallet.ts` | External wallets through viem: connect, chain switching, typed data and message signing, the registration transaction |
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
 | `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
 | `server/upload.mjs` | `/api/upload`: Farcaster CDN relay with a local fallback |

@@ -3,7 +3,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { HDKey } from '@scure/bip32'
 import { account, fidByName, LINK_RE, posting, setAccount, settings, toUrl, users, type Account, type Cast } from './api.ts'
-import { castBody, castRemoveBody, concat, ecSign, envelope, followBody, hex, keyAdd, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef } from './fc.ts'
+import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, keyCustody, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
 
 const keys = new Map<string, Promise<Uint8Array>>()
 /** Custody key derived the way Warpcast and Quorum do it (BIP-39 seed, m/44'/60'/0'/0/0), so phrases
@@ -19,6 +19,10 @@ export function custodyKey(phrase: string) {
     })())
   return keys.get(p)!
 }
+
+/** Who signs for an account's custody address: the key from its phrase, or the wallet it was connected with. */
+export const custodyOf = async (a: Account): Promise<Custody> =>
+  a.wallet ? (await import('./wallet.ts')).walletCustody(a.wallet) : keyCustody(await custodyKey(a.phrase))
 
 async function submit(m: { msg: Uint8Array; hash: string }) {
   const r = await fetch(`${settings.node}/v1/submitMessage`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: m.msg as BodyInit })
@@ -41,7 +45,7 @@ export async function ensureSigner(a = account!) {
   if (a.signer && a.signerAt! + TTL - 7 * 86400 > now && a.scopes === SCOPES_VERSION) return
   const priv = a.signer ? unhex(a.signer) : ed25519.utils.randomSecretKey()
   const nonce = Math.max((a.nonce || 0) + 1, now)
-  await submit(keyAdd(a.fid!, await custodyKey(a.phrase), priv, nonce))
+  await submit(await keyAdd(a.fid!, await custodyOf(a), priv, nonce))
   setAccount({ ...a, signer: hex(priv), signerAt: now, nonce, scopes: SCOPES_VERSION })
 }
 
@@ -100,8 +104,8 @@ async function login() {
   const exp = ts + 600e3
   const authRequest = { method: 'generateToken', params: { timestamp: ts, expiresAt: exp } }
   const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${exp},"timestamp":${ts}}}`)
-  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), await custodyKey(account!.phrase))
-  return { authorization: `Bearer eip191:${btoa(String.fromCharCode(...rs, v + 27))}`, 'x-auth-request': JSON.stringify(authRequest) }
+  const sig = await (await custodyOf(account!)).message(msg)
+  return { authorization: `Bearer eip191:${btoa(String.fromCharCode(...sig))}`, 'x-auth-request': JSON.stringify(authRequest) }
 }
 
 /** Upload a file in chunks through our server, which passes it to Farcaster's CDN (or keeps it). Returns the embed URL. */

@@ -1,6 +1,6 @@
 import { render, type ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, accounts, back, castText, get, go, hydrateParents, isFollowing, loadMine, posting, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
+import { account, accounts, back, castText, get, go, hydrateParents, idOf, isFollowing, loadMine, posting, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { ago, Avatar, CastCard, handle, Icon, Lightbox, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
@@ -47,7 +47,7 @@ function AccountList({ onDone }: { onDone?: () => void }) {
     <div class="accounts">
       {accounts.map((a) => {
         const u = (a.fid && users.get(a.fid)) || { fid: a.fid || 0, username: a.username }
-        const on = a.phrase === account?.phrase
+        const on = !!account && idOf(a) === idOf(account)
         return (
           <button class={`acct${on ? ' on' : ''}`} onClick={() => (on ? onDone?.() : switchAccount(a))}>
             <Avatar u={u} size={32} link={false} />
@@ -542,8 +542,11 @@ function Settings() {
   }
   const exportKeys = async () => {
     const [m, fc] = await Promise.all([w(), import('./fc.ts')])
-    const custody = await m.custodyKey(account!.phrase)
-    const data = { fid: account!.fid, username: account!.username, recoveryPhrase: account!.phrase, custodyAddress: fc.address(custody), custodyPrivateKey: '0x' + fc.hex(custody), signerPrivateKey: account!.signer && '0x' + account!.signer }
+    const acc = account!
+    // a wallet account has no phrase or custody key here, only its signer
+    const custody = acc.wallet ? undefined : await m.custodyKey(acc.phrase)
+    const keys = custody ? { recoveryPhrase: acc.phrase, custodyAddress: fc.address(custody), custodyPrivateKey: '0x' + fc.hex(custody) } : { custodyAddress: acc.wallet }
+    const data = { fid: acc.fid, username: acc.username, ...keys, signerPrivateKey: acc.signer && '0x' + acc.signer }
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: `quilcast-${account!.username || account!.fid}-keys.json` })
     a.click()
     URL.revokeObjectURL(a.href)
@@ -586,12 +589,18 @@ function Settings() {
         {account && (
           <section>
             <h2>Keys</h2>
-            <p class="hint">Your recovery phrase controls your account and also works in Quorum and Warpcast. It lives only in this browser, so keep a copy somewhere safe.</p>
-            <div class="setting"><span>Recovery phrase</span><span class="btns"><button class="btn ghost small" onClick={() => setPhrase(!phrase)}>{phrase ? 'Hide' : 'Show'}</button><button class="btn ghost small" onClick={() => navigator.clipboard.writeText(account!.phrase).then(() => toast('Copied'))}>Copy</button></span></div>
-            {phrase && <code class="phrase">{account.phrase}</code>}
-            <div class="setting"><span>All keys as a file</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
+            {account.wallet ? (
+              <p class="hint">This account belongs to the wallet <code>{account.wallet}</code>, which keeps its own keys. Quilcast only holds a signing key for this browser.</p>
+            ) : (
+              <>
+                <p class="hint">Your recovery phrase controls your account and also works in Quorum and Warpcast. It lives only in this browser, so keep a copy somewhere safe.</p>
+                <div class="setting"><span>Recovery phrase</span><span class="btns"><button class="btn ghost small" onClick={() => setPhrase(!phrase)}>{phrase ? 'Hide' : 'Show'}</button><button class="btn ghost small" onClick={() => navigator.clipboard.writeText(account!.phrase).then(() => toast('Copied'))}>Copy</button></span></div>
+                {phrase && <code class="phrase">{account.phrase}</code>}
+              </>
+            )}
+            <div class="setting"><span>{account.wallet ? 'Signing key as a file' : 'All keys as a file'}</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
             <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" disabled={out === 'busy'} onClick={signOut}>{out === 'busy' ? 'Signing out…' : out === 'stuck' ? 'Sign out anyway' : out ? 'Erase keys?' : 'Sign out'}</button></div>
-            {out && <p class="hint">This erases the recovery phrase from this browser. Export your keys first if it's your only copy.</p>}
+            {out && <p class="hint">{account.wallet ? 'This removes the account and its signing key from this browser. Your wallet is not affected.' : "This erases the recovery phrase from this browser. Export your keys first if it's your only copy."}</p>}
           </section>
         )}
         <section>

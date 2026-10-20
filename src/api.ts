@@ -13,7 +13,8 @@ const save = (k: string, v: unknown) => localStorage.setItem(k, JSON.stringify(v
 export const settings = load('quilcast:settings', { node: 'https://haatz.quilibrium.com', rpc: 'https://mainnet.optimism.io', theme: 'system' })
 export const saveSettings = () => save('quilcast:settings', settings)
 
-export type Account = { phrase: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean }
+// a phrase account keeps its recovery phrase; a wallet account has phrase '' and signs with `wallet` (its custody address)
+export type Account = { phrase: string; wallet?: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean }
 const list = (k: string): Account[] => {
   try {
     return JSON.parse(localStorage.getItem(k) || '[]')
@@ -21,24 +22,25 @@ const list = (k: string): Account[] => {
     return []
   }
 }
-// every account this browser holds; `account` is the selected one (keyed by phrase)
+// every account this browser holds; `account` is the selected one, keyed by its wallet or its phrase
+export const idOf = (a: Account) => a.wallet || a.phrase
 export let accounts = list('quilcast:accounts')
 const legacy = localStorage.getItem('quilcast:account')
 if (legacy && !accounts.length) accounts = [load<Account>('quilcast:account', { phrase: '' })]
-export let account: Account | null = accounts.find((a) => a.phrase === localStorage.getItem('quilcast:current')) || accounts[0] || null
+export let account: Account | null = accounts.find((a) => idOf(a) === localStorage.getItem('quilcast:current')) || accounts[0] || null
 
-/** Save `a` (added or updated, matched by phrase) and select it; `null` removes the selected account. */
+/** Save `a` (added or updated, matched by idOf) and select it; `null` removes the selected account. */
 export const setAccount = (a: Account | null) => {
   // re-read first: another tab may have added or removed accounts since this one loaded
   const fresh = list('quilcast:accounts')
   if (fresh.length || !legacy) accounts = fresh
   if (a) {
-    const i = accounts.findIndex((x) => x.phrase === a.phrase)
+    const i = accounts.findIndex((x) => idOf(x) === idOf(a))
     i < 0 ? accounts.push(a) : (accounts[i] = a)
-  } else accounts = accounts.filter((x) => x.phrase !== account?.phrase)
+  } else accounts = accounts.filter((x) => !account || idOf(x) !== idOf(account))
   account = a || accounts.find((x) => x.done) || accounts[0] || null
   save('quilcast:accounts', accounts)
-  account ? localStorage.setItem('quilcast:current', account.phrase) : localStorage.removeItem('quilcast:current')
+  account ? localStorage.setItem('quilcast:current', idOf(account)) : localStorage.removeItem('quilcast:current')
   localStorage.removeItem('quilcast:account')
   dispatchEvent(new Event('account'))
 }
@@ -46,13 +48,13 @@ export const setAccount = (a: Account | null) => {
 addEventListener('storage', (e) => {
   if (e.key !== 'quilcast:accounts') return
   accounts = list('quilcast:accounts')
-  const mine = account && accounts.find((x) => x.phrase === account!.phrase)
+  const mine = account && accounts.find((x) => idOf(x) === idOf(account!))
   if (account && !mine) return location.assign('/')
   account = mine || null
   dispatchEvent(new Event('account'))
 })
 // a full reload is the simplest way to drop the previous account's feeds and likes
-export const switchAccount = (a: Account) => (localStorage.setItem('quilcast:current', a.phrase), location.assign('/'))
+export const switchAccount = (a: Account) => (localStorage.setItem('quilcast:current', idOf(a)), location.assign('/'))
 
 let depth = 0
 export const go = (path: string) => {
