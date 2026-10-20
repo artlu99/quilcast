@@ -270,7 +270,7 @@ function RecastMenu({ c, on, toggle, close }: { c: Cast; on: boolean; toggle: ()
 }
 
 /** A cast row. `focus` is the thread's main cast; `line` draws the thread connector down to the next row. */
-export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolean; line?: boolean; inThread?: boolean }) {
+export function CastCard({ c, focus, line, inThread, quotes = 0 }: { c: Cast; focus?: boolean; line?: boolean; inThread?: boolean; quotes?: number }) {
   // what the node counted already includes our earlier reactions; local taps adjust from there
   const was = useMemo(() => [mine.likes.has(c.hash), mine.recasts.has(c.hash)], [c.hash, mineVersion])
   const [likedTap, setLiked] = useState<boolean | null>(null)
@@ -320,7 +320,13 @@ export function CastCard({ c, focus, line, inThread }: { c: Cast; focus?: boolea
         <RichText text={castText(c)} />
         <Embeds c={c} />
         <div class="when">{sending ? <span class="posting"><span class="pulse" /> Posting…</span> : new Date(c.timestamp).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })}</div>
-        {(recasts > 0 || likes > 0) && <div class="stats">{recasts > 0 && <span><b>{n(recasts)}</b> recasts</span>}{likes > 0 && <span><b>{n(likes)}</b> likes</span>}</div>}
+        {(recasts > 0 || quotes > 0 || likes > 0) && (
+          <div class="stats">
+            {recasts > 0 && <a href={`/c/${c.hash}/recasts`}><b>{n(recasts)}</b> {recasts === 1 ? 'recast' : 'recasts'}</a>}
+            {quotes > 0 && <a href={`/c/${c.hash}/quotes`}><b>{n(quotes)}</b> {quotes === 1 ? 'quote' : 'quotes'}</a>}
+            {likes > 0 && <a href={`/c/${c.hash}/likes`}><b>{n(likes)}</b> {likes === 1 ? 'like' : 'likes'}</a>}
+          </div>
+        )}
         {actions}
       </article>
     )

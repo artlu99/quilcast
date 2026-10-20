@@ -300,15 +300,40 @@ function useUnread() {
   return unread
 }
 
+const WHO = { likes: 'Liked by', recasts: 'Recast by', quotes: 'Quotes' }
+// ponytail: the node returns at most 100 reactions or quotes per cast and can't page them, so lists stop there
+const quotesOf = async (hash: string) => (await get('/v2/farcaster/cast/quotes', { identifier: hash, type: 'hash', limit: 100 })).casts as Cast[]
+
+/** Who liked or recast a cast, or the casts quoting it. */
+function Who({ hash, kind }: { hash: string; kind: keyof typeof WHO }) {
+  return (
+    <>
+      <Header title={WHO[kind]} />
+      <Pager<Cast | User> k={`${hash}:${kind}`} empty={kind === 'quotes' ? 'No quotes yet.' : 'Nobody yet.'}
+        id={(x) => ('hash' in x ? x.hash : String(x.fid))}
+        row={(xs) => xs.map((x) => ('hash' in x ? <CastCard key={x.hash} c={x} /> : <UserRow key={x.fid} u={x} />))}
+        load={async () => {
+          if (kind !== 'quotes') return { items: (await get('/v2/farcaster/reactions/cast', { hash, types: kind, limit: 100 })).reactions.map((r: { user: User }) => r.user), cursor: null }
+          const casts = await quotesOf(hash)
+          await hydrateParents(casts)
+          return { items: casts, cursor: null }
+        }} />
+    </>
+  )
+}
+
 function Thread({ hash }: { hash: string }) {
   const [c, setC] = useState<Cast | null>(null)
   const [up, setUp] = useState<Cast[]>([])
   const [err, setErr] = useState('')
+  const [quotes, setQuotes] = useState(0)
   useEffect(() => {
     let live = true
     setC(null)
     setUp([])
     setErr('')
+    setQuotes(0)
+    quotesOf(hash).then((q) => live && setQuotes(q.length), () => {})
     // walk up to five parents so the reply reads in context
     let walked = false
     const parents = async (cast: Cast) => {
@@ -349,7 +374,7 @@ function Thread({ hash }: { hash: string }) {
       {c && (
         <>
           {up.map((p) => <CastCard key={p.hash} c={p} line inThread />)}
-          <CastCard c={c} focus />
+          <CastCard c={c} focus quotes={quotes} />
           <button class="reply-prompt" onClick={() => (account?.done ? shell.compose({ parent: c }) : go('/join'))}>
             {account?.done && <Avatar u={users.get(account.fid!) || { fid: account.fid! }} size={32} link={false} />}
             <span>Post your reply</span>
@@ -615,7 +640,7 @@ const decode = (s: string) => {
 function App() {
   const [, force] = useState(0)
   const [compose, setCompose] = useState<Parameters<typeof shell.compose>[0] | null>(null)
-  const [r0, r1] = useRoute()
+  const [r0, r1, r2] = useRoute()
   const unread = useUnread()
   const [viewer, setViewer] = useState<{ urls: string[]; index: number } | null>(null)
   shell.compose = (o = {}) => setCompose(o)
@@ -632,7 +657,7 @@ function App() {
   }, [account?.fid])
   const me = account?.done ? users.get(account.fid!) || { fid: account.fid!, username: account.username } : null
   const view =
-    r0 === 'c' ? <Thread hash={r1} />
+    r0 === 'c' ? (Object.hasOwn(WHO, r2) ? <Who hash={r1} kind={r2 as keyof typeof WHO} /> : <Thread hash={r1} />)
       : r0 === 'u' ? <Profile id={decode(r1)} />
         : r0 === 'search' ? <Search />
           : r0 === 'notifications' ? <Notifications />

@@ -7,6 +7,7 @@ Live at **[quilcast.com](https://quilcast.com)**.
 ## What it does
 
 - Following and trending feeds (top-level casts), threads with their parent casts, profiles with separate casts and replies tabs
+- On a cast's page, the like, recast and quote counts open lists of who liked, recast or quoted it
 - Notifications: grouped likes, recasts and follows plus replies, mentions and quotes, with an unread dot
 - Several accounts per browser, switched from the account menu (bottom left) or Settings
 - Rich link previews (Open Graph and Farcaster mini app images) through `/api/unfurl`, and @mention autocomplete in the composer

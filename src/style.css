@@ -191,6 +191,8 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .when { color: var(--muted); font-size: 14px; margin: 12px 0 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .stats { display: flex; gap: 18px; font-size: 14px; color: var(--muted); padding: 10px 0; border-bottom: 1px solid var(--line); }
 .stats b { color: var(--ink); }
+.stats a { color: inherit; }
+.stats a:hover { text-decoration: underline; }
 .cast.focus footer { max-width: none; margin: 2px 0 0; justify-content: space-around; }
 .reply-prompt { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--muted); text-align: left; font-size: 16px; }
 .reply-prompt:hover { background: var(--hover); }
