@@ -1,7 +1,7 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { useEffect, useState } from 'preact/hooks'
-import { account, get, loadMine, setAccount, settings, USER_DATA, type Account } from './api.ts'
+import { account, get, go, loadMine, setAccount, settings, USER_DATA, type Account } from './api.ts'
 import { balance, fidOf, register, registerPrice } from './eth.ts'
 import { address, fnameProof } from './fc.ts'
 import { custodyKey, ensureSigner, setUserData } from './write.ts'
@@ -14,13 +14,13 @@ const finish = async (a: Account) => {
   const u = await get('/v2/farcaster/user', { fid: a.fid }).catch(() => null)
   setAccount({ ...account!, username: u?.user?.username || a.username, done: true })
   await loadMine()
-  location.hash = '#/'
+  go('/')
 }
 
 export function Join() {
   const [mode, setMode] = useState<'pick' | 'create' | 'signin'>('pick')
   if (account && !account.done) return <Setup />
-  if (account?.done) return <div class="note">You're signed in. <a href="#/">Go to your feed</a></div>
+  if (account?.done) return <div class="note">You're signed in. <a href="/">Go to your feed</a></div>
   if (mode === 'create') return <Create back={() => setMode('pick')} />
   if (mode === 'signin') return <SignIn back={() => setMode('pick')} />
   return (

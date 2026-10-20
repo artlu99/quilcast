@@ -1,6 +1,6 @@
 # Quilcast
 
-A small Farcaster client that runs entirely in the browser and talks straight to the [Hypersnap](https://hypersnap.org) network that Quilibrium runs. There's no backend: reads hit the public node's HTTP API, writes are protobuf messages signed in the browser and posted to `/v1/submitMessage`, and keys live in `localStorage`.
+A small Farcaster client that runs in the browser and talks straight to the [Hypersnap](https://hypersnap.org) network that Quilibrium runs. Reads hit the public node's HTTP API, writes are protobuf messages signed in the browser and posted to `/v1/submitMessage`, and keys live in `localStorage`. The only server is a tiny static host that also gives shared links proper previews.
 
 Live at **[quilcast.com](https://quilcast.com)**.
 
@@ -21,6 +21,7 @@ Live at **[quilcast.com](https://quilcast.com)**.
 | `src/api.ts` | Hypersnap reads and the locally stored account |
 | `src/write.ts` | Signed writes, loaded on demand so readers don't download the crypto |
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
+| `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, and renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg |
 
 The message encoders are checked byte for byte against `@farcaster/core`, `viem` and Quilibrium's `quorum-shared`.
 
@@ -30,11 +31,9 @@ The message encoders are checked byte for byte against `@farcaster/core`, `viem`
 npm install
 npm run dev
 npm test
-npm run build   # → dist/, deployed to GitHub Pages on every push to main
+npm run build && npm start   # production server on :3000
 ```
 
 Your recovery phrase is stored unencrypted in this browser's `localStorage`. Anyone with access to your browser profile can take over the account, so treat it like a hot wallet.
 
-## Share previews
-
-`og/` is the one optional server: `s.quilcast.com/c/<hash>` serves a page with Open Graph tags plus a rendered 1200×630 card of the cast (resvg, Inter and Noto Emoji), then redirects to the app. It runs on Easypanel from `og/Dockerfile`.
+Production runs from the `Dockerfile` on Easypanel.

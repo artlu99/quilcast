@@ -1,6 +1,6 @@
 import { render } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, get, isFollowing, loadMine, mine, saveSettings, setAccount, settings, USER_DATA } from './api.ts'
+import { account, back, get, go, isFollowing, loadMine, mine, saveSettings, setAccount, settings, USER_DATA } from './api.ts'
 import './style.css'
 
 // keys and crypto load only when someone signs in or writes
@@ -51,7 +51,7 @@ const ago = (t: string) => {
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: s > 300 * 86400 ? 'numeric' : undefined })
 }
 const n = (x = 0) => (x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e4 ? Math.round(x / 1e3) + 'K' : x >= 1e3 ? (x / 1e3).toFixed(1) + 'K' : String(x))
-const userPath = (u: User) => `#/u/${u.username || u.fid}`
+const userPath = (u: User) => `/u/${u.username || u.fid}`
 
 export const Avatar = ({ u, size = 44 }: { u: User; size?: number }) => (
   <a class="avatar" href={userPath(u)} style={{ width: `${size}px`, height: `${size}px` }} onClick={(e) => e.stopPropagation()}>
@@ -66,7 +66,7 @@ function Text({ text }: { text: string }) {
     <p class="text">
       {parts.map((p, i) =>
         i % 2 === 0 ? p
-          : p[0] === '@' ? <a key={i} href={`#/u/${p.slice(1)}`} onClick={(e) => e.stopPropagation()}>{p}</a>
+          : p[0] === '@' ? <a key={i} href={`/u/${p.slice(1)}`} onClick={(e) => e.stopPropagation()}>{p}</a>
             : p[0] === '/' ? <span key={i} class="chan">{p}</span>
               : <a key={i} href={p} target="_blank" rel="noopener noreferrer nofollow" onClick={(e) => e.stopPropagation()}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 48)}{p.length > 56 ? '…' : ''}</a>,
       )}
@@ -105,9 +105,9 @@ function Embeds({ c, text }: { c: Cast; text: string }) {
 function Quote({ id }: { id: { fid: number; hash: string } }) {
   const [c, setC] = useState<Cast | null>(null)
   useEffect(() => void get('/v2/farcaster/cast', { identifier: id.hash.replace(/^0x/, ''), type: 'hash' }).then((r) => setC(r.cast), () => {}), [id.hash])
-  if (!c) return <a class="quote" href={`#/c/${id.hash}`}>Quoted cast</a>
+  if (!c) return <a class="quote" href={`/c/${id.hash}`}>Quoted cast</a>
   return (
-    <a class="quote" href={`#/c/${c.hash}`} onClick={(e) => e.stopPropagation()}>
+    <a class="quote" href={`/c/${c.hash}`} onClick={(e) => e.stopPropagation()}>
       <div class="who"><Avatar u={c.author} size={20} /><b>{c.author.display_name || c.author.username}</b><span>@{c.author.username}</span></div>
       <Text text={c.text} />
     </a>
@@ -124,20 +124,20 @@ export function CastCard({ c, big, inThread, onReply }: { c: Cast; big?: boolean
   const [recast, setRecast] = useState(was[1])
   const [gone, setGone] = useState(false)
   const toggle = async (type: 1 | 2, on: boolean, set: (v: boolean) => void, bag: Set<string>) => {
-    if (!account?.done) return (location.hash = '#/join')
+    if (!account?.done) return go('/join')
     set(on)
     on ? bag.add(c.hash) : bag.delete(c.hash)
     w().then((m) => m.react(type, on, c)).catch((e) => (set(!on), on ? bag.delete(c.hash) : bag.add(c.hash), toast(e.message)))
   }
   const share = () => {
-    const url = `https://s.quilcast.com/c/${c.hash}`
+    const url = `${location.origin}/c/${c.hash}`
     navigator.share ? navigator.share({ url }).catch(() => {}) : navigator.clipboard.writeText(url).then(() => toast('Link copied'))
   }
   if (gone) return null
   const ch = channelOf(c.parent_url)
   const self = account?.fid === c.author.fid
   return (
-    <article class={`cast${big ? ' big' : ''}`} onClick={() => !big && (location.hash = `#/c/${c.hash}`)}>
+    <article class={`cast${big ? ' big' : ''}`} onClick={() => !big && go(`/c/${c.hash}`)}>
       <Avatar u={c.author} size={big ? 48 : 44} />
       <div class="body">
         <header>
@@ -147,11 +147,11 @@ export function CastCard({ c, big, inThread, onReply }: { c: Cast; big?: boolean
           <time dateTime={c.timestamp} title={new Date(c.timestamp).toLocaleString()}>{ago(c.timestamp)}</time>
           {ch && <span class="chan">/{ch}</span>}
         </header>
-        {c.parent_hash && !big && !inThread && <a class="replying" href={`#/c/${c.parent_hash}`} onClick={(e) => e.stopPropagation()}>Replying to a cast</a>}
+        {c.parent_hash && !big && !inThread && <a class="replying" href={`/c/${c.parent_hash}`} onClick={(e) => e.stopPropagation()}>Replying to a cast</a>}
         <Text text={c.text} />
         <Embeds c={c} text={c.text} />
         <footer onClick={(e) => e.stopPropagation()}>
-          <button class="act" aria-label="Reply" onClick={() => (account?.done ? onReply(c) : (location.hash = '#/join'))}><Icon d={P.reply} />{n(c.replies.count)}</button>
+          <button class="act" aria-label="Reply" onClick={() => (account?.done ? onReply(c) : go('/join'))}><Icon d={P.reply} />{n(c.replies.count)}</button>
           <button class={`act rc${recast ? ' on' : ''}`} aria-label="Recast" onClick={() => toggle(2, !recast, setRecast, mine.recasts)}><Icon d={P.recast} />{n(c.reactions.recasts_count + +recast - +was[1])}</button>
           <button class={`act lk${liked ? ' on' : ''}`} aria-label="Like" onClick={() => toggle(1, !liked, setLiked, mine.likes)}><Icon d={P.like} fill={liked} />{n(c.reactions.likes_count + +liked - +was[0])}</button>
           <button class="act" aria-label="Share" onClick={share}><Icon d={P.share} /></button>
@@ -246,7 +246,7 @@ const JoinBanner = () => (
       <b>Farcaster without the middlemen.</b>
       <p>Quilcast talks straight to the public Hypersnap network, and your keys never leave this browser.</p>
     </div>
-    <a class="btn" href="#/join">Join</a>
+    <a class="btn" href="/join">Join</a>
   </div>
 )
 
@@ -261,7 +261,7 @@ function Thread({ hash, onReply }: { hash: string; onReply: (c: Cast) => void })
   if (!c) return <div class="spinner" />
   return (
     <>
-      {c.parent_hash && <a class="up" href={`#/c/${c.parent_hash}`}>Show the cast this replies to</a>}
+      {c.parent_hash && <a class="up" href={`/c/${c.parent_hash}`}>Show the cast this replies to</a>}
       <CastCard c={c} big onReply={onReply} />
       <div class="replies">
         {(c.direct_replies || []).map((r) => (
@@ -291,7 +291,7 @@ function Profile({ id, onReply }: { id: string; onReply: (c: Cast) => void }) {
   if (!u) return <div class="spinner" />
   const self = account?.fid === u.fid
   const toggle = () => {
-    if (!account?.done) return (location.hash = '#/join')
+    if (!account?.done) return go('/join')
     const on = !following
     setFollowing(on)
     w().then((m) => m.follow(u.fid, on)).catch((e) => (setFollowing(!on), toast(e.message)))
@@ -301,7 +301,7 @@ function Profile({ id, onReply }: { id: string; onReply: (c: Cast) => void }) {
       <section class="profile">
         <div class="row">
           <Avatar u={u} size={76} />
-          {self ? <a class="btn ghost" href="#/settings">Edit profile</a> : <button class={`btn${following ? ' ghost' : ''}`} onClick={toggle} disabled={following === null && !!account?.done}>{following ? 'Following' : 'Follow'}</button>}
+          {self ? <a class="btn ghost" href="/settings">Edit profile</a> : <button class={`btn${following ? ' ghost' : ''}`} onClick={toggle} disabled={following === null && !!account?.done}>{following ? 'Following' : 'Follow'}</button>}
         </div>
         <h1>{u.display_name || u.username}</h1>
         <div class="handle">@{u.username || u.fid} <span class="fid">fid {u.fid}</span></div>
@@ -379,7 +379,7 @@ function Settings() {
           <h2>Account</h2>
           <p class="muted">Your recovery phrase controls your Farcaster account. It's stored only in this browser, and it also works in Quorum, Warpcast and other Farcaster apps.</p>
           {showPhrase ? <code class="phrase">{account.phrase}</code> : <button class="btn ghost" onClick={() => setShowPhrase(true)}>Show recovery phrase</button>}
-          <button class="btn danger" onClick={() => (confirmOut ? (setAccount(null), (location.hash = '#/')) : setConfirmOut(true))}>{confirmOut ? 'Tap again to sign out and erase keys' : 'Sign out'}</button>
+          <button class="btn danger" onClick={() => (confirmOut ? (setAccount(null), go('/')) : setConfirmOut(true))}>{confirmOut ? 'Tap again to sign out and erase keys' : 'Sign out'}</button>
         </section>
       )}
       <p class="muted small">Quilcast is open source at <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">github.com/backmeupplz/quilcast</a>.</p>
@@ -402,7 +402,7 @@ function Composer({ parent, onClose }: { parent?: Cast; onClose: () => void }) {
       const hash = await (await w()).post(text.trim(), parent && { fid: parent.author.fid, hash: parent.hash })
       onClose()
       toast(parent ? 'Reply sent' : 'Cast sent')
-      location.hash = `#/c/${hash}`
+      go(`/c/${hash}`)
     } catch (e: any) {
       toast(e.message)
       setBusy(false)
@@ -429,14 +429,22 @@ function applyTheme() {
   settings.theme === 'system' ? delete document.documentElement.dataset.theme : (document.documentElement.dataset.theme = settings.theme)
 }
 
+// same-origin links navigate in place instead of reloading the page
+addEventListener('click', (e) => {
+  const a = (e.target as Element).closest?.('a')
+  if (!a || a.target || a.origin !== location.origin || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return
+  e.preventDefault()
+  a.pathname !== location.pathname && go(a.pathname)
+})
+
 const useRoute = () => {
-  const [h, setH] = useState(location.hash)
+  const [p, setP] = useState(location.pathname)
   useEffect(() => {
-    const f = () => (setH(location.hash), scrollTo(0, 0))
-    addEventListener('hashchange', f)
-    return () => removeEventListener('hashchange', f)
+    const f = () => (setP(location.pathname), scrollTo(0, 0))
+    addEventListener('popstate', f)
+    return () => removeEventListener('popstate', f)
   }, [])
-  return h.replace(/^#\/?/, '').split('/')
+  return p.slice(1).split('/')
 }
 
 function App() {
@@ -461,11 +469,11 @@ function App() {
     <>
       <header class="top">
         <div class="wrap">
-          {r0 ? <button class="icon-btn" aria-label="Back" onClick={() => (history.length > 1 ? history.back() : (location.hash = '#/'))}><Icon d={P.back} /></button> : <span class="icon-btn" />}
-          <a class="brand" href="#/"><Logo /><span>Quilcast</span></a>
+          {r0 ? <button class="icon-btn" aria-label="Back" onClick={back}><Icon d={P.back} /></button> : <span class="icon-btn" />}
+          <a class="brand" href="/"><Logo /><span>Quilcast</span></a>
           <div class="right">
-            {me ? <a href={`#/u/${account!.username || account!.fid}`} class="me" aria-label="Your profile">{account!.username ? `@${account!.username}` : 'Profile'}</a> : <a class="btn small" href="#/join">Join</a>}
-            <a class="icon-btn" href="#/settings" aria-label="Settings"><Icon d={P.gear} /></a>
+            {me ? <a href={`/u/${account!.username || account!.fid}`} class="me" aria-label="Your profile">{account!.username ? `@${account!.username}` : 'Profile'}</a> : <a class="btn small" href="/join">Join</a>}
+            <a class="icon-btn" href="/settings" aria-label="Settings"><Icon d={P.gear} /></a>
           </div>
         </div>
       </header>

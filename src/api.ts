@@ -21,6 +21,15 @@ export const setAccount = (a: Account | null) => {
   dispatchEvent(new Event('account'))
 }
 
+let depth = 0
+export const go = (path: string) => {
+  depth++
+  history.pushState(null, '', path)
+  dispatchEvent(new Event('popstate'))
+}
+// leave the app only if we arrived on this page from outside it
+export const back = () => (depth > 0 ? (depth--, history.back()) : go('/'))
+
 export const USER_DATA = { PFP: 1, DISPLAY: 2, BIO: 3, URL: 5, USERNAME: 6 }
 
 export async function get<T = any>(path: string, q: Record<string, string | number | undefined> = {}): Promise<T> {

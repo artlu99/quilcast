@@ -1,12 +1,13 @@
-// Share pages and 1200×630 preview images for casts, so links unfurl with the cast itself.
-//   GET /c/<hash>      → HTML with og/twitter tags that redirects to quilcast.com/#/c/<hash>
-//   GET /c/<hash>.png  → the preview image
+// Serves the built app from dist/ and gives cast and profile pages real meta tags,
+// plus a rendered 1200×630 card per cast at /og/c/<hash>.png, so shared links unfurl.
 import { Resvg } from '@resvg/resvg-js'
+import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { extname, join, normalize } from 'node:path'
 
 const NODE = process.env.NODE_URL || 'https://haatz.quilibrium.com'
-const APP = process.env.APP_URL || 'https://quilcast.com'
-const SELF = process.env.SELF_URL || 'https://s.quilcast.com'
+const SITE = process.env.SITE_URL || 'https://quilcast.com'
+const DIST = new URL('../dist/', import.meta.url).pathname
 const FONTS = ['Inter-Regular.ttf', 'Inter-Bold.ttf', 'NotoEmoji.ttf'].map((f) => new URL(`fonts/${f}`, import.meta.url).pathname)
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -85,32 +86,60 @@ async function card(c) {
 const cache = new Map()
 const remember = (k, v) => (cache.size > 500 && cache.delete(cache.keys().next().value), cache.set(k, v), v)
 const getCast = (hash) => cache.get(hash) || remember(hash, fetchJson(`${NODE}/v2/farcaster/cast?identifier=${hash}&type=hash`).then((r) => r?.cast || (cache.delete(hash), null)))
+const getUser = (name) => fetchJson(`${NODE}/v2/farcaster/user${/^\d+$/.test(name) ? `?fid=${name}` : `/by-username?username=${encodeURIComponent(name)}`}`).then((r) => r?.user)
+const render = (svg) => new Resvg(svg, { font: { fontFiles: FONTS, loadSystemFonts: false, defaultFontFamily: 'Inter' } }).render().asPng()
+
+const index = await readFile(join(DIST, 'index.html'), 'utf8')
+// swap the default title/description/url/image in index.html for page-specific ones
+function page({ title, desc, path, image, alt }) {
+  let h = index.replace(/<title>[^<]*<\/title>/, `<title>${esc(title)}</title>`)
+  const set = (attr, keys, v) => keys.forEach((k) => (h = h.replace(new RegExp(`(<meta ${attr}="${k}" content=")[^"]*`), `$1${esc(v)}`)))
+  set('name', ['description', 'twitter:description'], desc)
+  set('property', ['og:description'], desc)
+  set('property', ['og:title'], title)
+  set('name', ['twitter:title'], title)
+  set('property', ['og:url'], SITE + path)
+  if (image) set('property', ['og:image'], image), set('name', ['twitter:image'], image), set('property', ['og:image:alt'], alt), set('name', ['twitter:image:alt'], alt)
+  return h.replace(/(<link rel="canonical" href=")[^"]*/, `$1${SITE + path}`).replace('<meta property="og:type" content="website" />', '<meta property="og:type" content="article" />')
+}
+
+const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain', '.json': 'application/json', '.webmanifest': 'application/manifest+json' }
+const html = (res, body) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }).end(body)
 
 createServer(async (req, res) => {
-  const m = req.url.match(/^\/c\/(?:0x)?([0-9a-f]{40})(\.png)?(?:\?|$)/i)
-  if (req.url === '/health') return res.end('ok')
-  if (!m) return res.writeHead(302, { location: APP }).end()
-  const hash = m[1].toLowerCase()
-  const target = `${APP}/#/c/${hash}`
+  const path = decodeURIComponent(new URL(req.url, 'http://x').pathname)
   try {
-    const c = await getCast(hash)
-    if (!c) return res.writeHead(302, { location: target }).end()
-    if (m[2]) {
-      const png = await (cache.get(hash + '.png') || remember(hash + '.png', card(c).then((svg) => new Resvg(svg, { font: { fontFiles: FONTS, loadSystemFonts: false, defaultFontFamily: 'Inter' } }).render().asPng())))
+    if (path === '/health') return res.end('ok')
+    const og = path.match(/^\/og\/c\/(?:0x)?([0-9a-f]{40})\.png$/i)
+    if (og) {
+      const hash = og[1].toLowerCase()
+      const c = await getCast(hash)
+      if (!c) return res.writeHead(404).end()
+      const png = await (cache.get(hash + '.png') || remember(hash + '.png', card(c).then(render)))
       return res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=3600' }).end(png)
     }
-    const name = c.author.display_name || c.author.username
-    const title = `${name} (@${c.author.username}) on Quilcast`
-    const desc = c.text.slice(0, 280) || 'A cast on Farcaster'
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' }).end(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
-<meta name="description" content="${esc(desc)}"><link rel="canonical" href="${esc(target)}">
-<meta property="og:type" content="article"><meta property="og:site_name" content="Quilcast"><meta property="og:url" content="${SELF}/c/${hash}">
-<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}">
-<meta property="og:image" content="${SELF}/c/${hash}.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="${esc(desc)}">
-<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${esc(title)}"><meta name="twitter:description" content="${esc(desc)}"><meta name="twitter:image" content="${SELF}/c/${hash}.png"><meta name="twitter:image:alt" content="${esc(desc)}">
-<meta http-equiv="refresh" content="0;url=${esc(target)}"></head><body><a href="${esc(target)}">Open this cast on Quilcast</a></body></html>`)
+    const cast = path.match(/^\/c\/(?:0x)?([0-9a-f]{40})$/i)
+    if (cast) {
+      const c = await getCast(cast[1].toLowerCase())
+      if (!c) return html(res, index)
+      const desc = c.text.slice(0, 280) || 'A cast on Farcaster'
+      return html(res, page({ title: `${c.author.display_name || c.author.username} (@${c.author.username}) on Quilcast`, desc, path, image: `${SITE}/og/c/${c.hash}.png`, alt: desc }))
+    }
+    const user = path.match(/^\/u\/([^/]+)$/)
+    if (user) {
+      const u = await getUser(user[1]).catch(() => null)
+      if (!u) return html(res, index)
+      return html(res, page({ title: `${u.display_name || u.username} (@${u.username}) on Quilcast`, desc: u.profile?.bio?.text || `${u.display_name || u.username} on Farcaster`, path }))
+    }
+    const file = normalize(join(DIST, path))
+    if (file.startsWith(DIST) && extname(file)) {
+      const body = await readFile(file).catch(() => null)
+      if (body) return res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=3600' }).end(body)
+      return res.writeHead(404).end()
+    }
+    html(res, index)
   } catch (e) {
-    cache.delete(hash)
-    res.writeHead(302, { location: target }).end()
+    console.error(path, e)
+    res.headersSent || html(res, index)
   }
 }).listen(process.env.PORT || 3000)

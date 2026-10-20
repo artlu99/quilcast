@@ -3,13 +3,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/*.test.ts"
+    "test": "node --test src/*.test.ts",
+    "start": "node server/index.mjs"
   },
   "type": "module",
   "private": true,
   "dependencies": {
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
+    "@resvg/resvg-js": "2.6.2",
     "@scure/bip32": "2.4.0",
     "@scure/bip39": "2.4.0",
     "preact": "11.0.1"
