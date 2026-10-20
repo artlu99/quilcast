@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, get, go, users, type Cast, type User } from './api.ts'
-import { Avatar, channelUrl, handle, Icon, P, QuoteCard, toast, w } from './ui.tsx'
+import { account, get, go, LINK_RE, toUrl, users, type Cast, type User } from './api.ts'
+import { Avatar, channelUrl, handle, Icon, LinkCard, P, QuoteCard, toast, w } from './ui.tsx'
 
-type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string; stage?: 'uploading' | 'processing'; pct?: number }
+type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string; stage?: 'uploading' | 'processing'; pct?: number; left?: number }
 const bytes = (s: string) => new TextEncoder().encode(s).length
 
 // photos are re-encoded (≤2048px JPEG) so EXIF/GPS never leaves the device; GIFs and videos go as-is
@@ -41,17 +41,28 @@ function ChannelPicker({ value, set }: { value?: string; set: (v?: string) => vo
   )
 }
 
-export function Composer({ parent, quote, channel: initial, onClose }: { parent?: Cast; quote?: Cast; channel?: string; onClose: () => void }) {
-  const [text, setText] = useState('')
-  const [files, setFiles] = useState<Attachment[]>([])
-  const [channel, setChannel] = useState(initial)
-  const [busy, setBusy] = useState(false)
+type Part = { id: number; text: string; files: Attachment[] }
+const LIMIT = 1024 // casts over 320 bytes go out as long casts, which allow up to 1024
+const newPart = (): Part => ({ id: Math.random(), text: '', files: [] })
+const linksIn = (text: string) => [...new Set((text.match(LINK_RE) || []).map(toUrl))]
+const fmtLeft = (s?: number) => (s === undefined || !isFinite(s) ? '' : s < 60 ? ` · ${Math.max(1, Math.round(s))}s left` : ` · ${Math.round(s / 60)} min left`)
+
+/** One post of a thread: text with @mention autocomplete, its attachments and the links it will embed. */
+function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, placeholder }: {
+  part: Part; set: (p: Partial<Part>) => void; first: boolean; last: boolean; quote?: Cast
+  focus: boolean; onFocus: () => void; attach: (files: FileList | null) => void; placeholder: string
+}) {
   const ref = useRef<HTMLTextAreaElement>(null)
-  const pick = useRef<HTMLInputElement>(null)
-  // @mention autocomplete: the "@word" right before the caret
   const [tok, setTok] = useState<{ start: number; q: string } | null>(null)
   const [sug, setSug] = useState<User[]>([])
   const [sel, setSel] = useState(0)
+  const [links, setLinks] = useState<string[]>([])
+  useEffect(() => void (focus && ref.current?.focus()), [focus])
+  // link previews follow the text once typing pauses
+  useEffect(() => {
+    const t = setTimeout(() => setLinks(linksIn(part.text)), 600)
+    return () => clearTimeout(t)
+  }, [part.text])
   const findToken = (el: HTMLTextAreaElement) => {
     const m = el.value.slice(0, el.selectionStart).match(/(?:^|\s)@([a-z0-9][a-z0-9.-]*)$/i)
     setTok(m ? { start: el.selectionStart - m[1].length - 1, q: m[1].toLowerCase() } : null)
@@ -67,9 +78,8 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
   }, [tok?.q])
   const mention = (u: User) => {
     const el = ref.current!
-    const end = el.selectionStart
-    const next = text.slice(0, tok!.start) + '@' + u.username + ' ' + text.slice(end)
-    setText(next)
+    const next = part.text.slice(0, tok!.start) + '@' + u.username + ' ' + part.text.slice(el.selectionStart)
+    set({ text: next })
     setTok(null)
     const caret = tok!.start + u.username!.length + 2
     requestAnimationFrame(() => (el.focus(), el.setSelectionRange(caret, caret)))
@@ -83,35 +93,102 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
     e.preventDefault()
     e.stopPropagation()
   }
-  useEffect(() => ref.current?.focus(), [])
-  const left = 320 - bytes(text)
-  const slots = 2 - (quote ? 1 : 0)
-  const uploading = files.some((f) => !f.url && !f.err)
-  const ready = (text.trim() || files.length || quote) && left >= 0 && !uploading && !files.some((f) => f.err)
+  const grow = (el: HTMLTextAreaElement) => ((el.style.height = 'auto'), (el.style.height = el.scrollHeight + 'px'))
+  useEffect(() => void (ref.current && grow(ref.current)), [part.text])
+  const slots = Math.max(0, 2 - part.files.length - (first && quote ? 1 : 0))
+  return (
+    <div class={`part${last ? '' : ' threaded'}`} onClick={onFocus}>
+      <div class="editor">
+        {account && <Avatar u={users.get(account.fid!) || { fid: account.fid!, username: account.username }} size={36} link={false} />}
+        <textarea ref={ref} value={part.text} rows={1} placeholder={placeholder}
+          onInput={(e) => (set({ text: e.currentTarget.value }), findToken(e.currentTarget))}
+          onKeyDown={keys} onClick={(e) => findToken(e.currentTarget)} onFocus={onFocus}
+          onPaste={(e) => e.clipboardData?.files.length && (e.preventDefault(), attach(e.clipboardData.files))} />
+      </div>
+      {tok && sug.length > 0 && (
+        <div class="mentions" role="listbox">
+          {sug.map((u, i) => (
+            <button role="option" aria-selected={i === sel} class={i === sel ? 'on' : ''} onMouseDown={(e) => (e.preventDefault(), mention(u))}>
+              <Avatar u={u} size={28} link={false} />
+              <b>{u.display_name || u.username}</b><span class="handle">@{u.username}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {part.files.length > 0 && (
+        <div class="attachments">
+          {part.files.map((f) => (
+            <div class={`att${f.err ? ' bad' : ''}`}>
+              {f.video ? <video src={f.preview} muted /> : <img src={f.preview} alt="" />}
+              {!f.url && !f.err && (
+                <span class="att-busy">
+                  <span class="spinner small" />
+                  <span class="att-stage">{f.stage === 'processing' ? (f.video ? 'Processing video…' : 'Finishing…') : `Uploading ${f.pct ?? 0}%${fmtLeft(f.left)}`}</span>
+                  {f.stage !== 'processing' && <span class="att-bar"><i style={{ width: `${f.pct ?? 0}%` }} /></span>}
+                </span>
+              )}
+              {f.err && <span class="att-err">{f.err}</span>}
+              <button class="att-x" aria-label="Remove" onClick={() => set({ files: part.files.filter((x) => x.id !== f.id) })}><Icon d={P.x} size={14} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      {first && quote && <div class="embed-preview"><QuoteCard c={quote} /></div>}
+      {links.slice(0, slots).map((u) => <div class="embed-preview"><LinkCard u={u} /></div>)}
+    </div>
+  )
+}
 
-  const attach = async (list: FileList | null) => {
-    for (const file of [...(list || [])].slice(0, slots - files.length)) {
+export function Composer({ parent, quote, channel: initial, onClose }: { parent?: Cast; quote?: Cast; channel?: string; onClose: () => void }) {
+  const [parts, setParts] = useState<Part[]>([newPart()])
+  const [active, setActive] = useState(0)
+  const [channel, setChannel] = useState(initial)
+  const [busy, setBusy] = useState(false)
+  const pick = useRef<HTMLInputElement>(null)
+  const update = (id: number, p: Partial<Part> | ((x: Part) => Partial<Part>)) =>
+    setParts((ps) => ps.map((x) => (x.id === id ? { ...x, ...(typeof p === 'function' ? p(x) : p) } : x)))
+  const cur = parts[active] || parts[0]
+  const left = LIMIT - bytes(cur.text)
+  const filled = (p: Part, i: number) => p.text.trim() || p.files.length || (i === 0 && quote)
+  const ready = parts.every((p, i) => (filled(p, i) || (i > 0 && !p.text && !p.files.length)) && bytes(p.text) <= LIMIT && p.files.every((f) => f.url)) && filled(parts[0], 0)
+
+  const attach = (list: FileList | null) => {
+    const part = cur
+    const room = 2 - part.files.length - (active === 0 && quote ? 1 : 0)
+    for (const file of [...(list || [])].slice(0, room)) {
       const a: Attachment = { id: Math.random(), preview: URL.createObjectURL(file), video: file.type.startsWith('video/') }
-      const update = (p: Partial<Attachment>) => setFiles((fs) => fs.map((f) => (f.id === a.id ? { ...f, ...p } : f)))
-      setFiles((fs) => [...fs, a])
+      const patch = (p: Partial<Attachment>) => update(part.id, (x) => ({ files: x.files.map((f) => (f.id === a.id ? { ...f, ...p } : f)) }))
+      update(part.id, (x) => ({ files: [...x.files, a] }))
       shrink(file)
-        .then(async (blob) => (await w()).upload(blob, (stage, f) => update({ stage, pct: f === undefined ? undefined : Math.round(f * 100) })))
-        .then((url) => update({ url }), (e) => update({ err: e.message }))
+        .then(async (blob) => (await w()).upload(blob, (stage, f, secs) => patch({ stage, pct: f === undefined ? undefined : Math.round(f * 100), left: secs })))
+        .then((url) => patch({ url }), (e) => patch({ err: e.message }))
     }
   }
+  const add = () => (setParts((ps) => [...ps, newPart()]), setActive(parts.length))
   const send = async () => {
     setBusy(true)
+    const m = await w()
+    let prev: { fid: number; hash: string } | undefined = parent && { fid: parent.author.fid, hash: parent.hash }
+    let first = ''
     try {
-      const hash = await (await w()).post(text.trim(), {
-        parent: parent && { fid: parent.author.fid, hash: parent.hash },
-        channel: !parent && channel ? channelUrl(channel) : undefined,
-        quote: quote && { fid: quote.author.fid, hash: quote.hash },
-        media: files.map((f) => f.url!),
-      })
+      // a thread is the first cast plus each next one replying to the one before it
+      for (const [i, p] of parts.entries()) {
+        if (!filled(p, i)) continue
+        const hash = await m.post(p.text.trim(), {
+          parent: prev,
+          channel: i === 0 && !parent && channel ? channelUrl(channel) : undefined,
+          quote: i === 0 && quote ? { fid: quote.author.fid, hash: quote.hash } : undefined,
+          media: p.files.map((f) => f.url!),
+        })
+        first ||= hash
+        prev = { fid: account!.fid!, hash }
+        setParts((ps) => ps.filter((x) => x.id !== p.id))
+      }
       onClose()
-      toast(parent ? 'Reply sent' : 'Cast sent')
-      go(`/c/${hash}`)
+      toast(parts.length > 1 ? 'Thread posted' : parent ? 'Reply sent' : 'Cast sent')
+      go(`/c/${first}`)
     } catch (e: any) {
+      // whatever already went out is removed from the composer, so a retry continues the thread
       toast(e.message)
       setBusy(false)
     }
@@ -119,10 +196,10 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
   return (
     <div class="modal" onClick={onClose}>
       <div class="sheet" role="dialog" aria-label={parent ? 'Reply' : quote ? 'Quote cast' : 'New cast'} onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => (e.key === 'Escape' && onClose(), (e.metaKey || e.ctrlKey) && e.key === 'Enter' && ready && send())}>
+        onKeyDown={(e) => (e.key === 'Escape' && onClose(), (e.metaKey || e.ctrlKey) && e.key === 'Enter' && ready && !busy && send())}>
         <div class="sheet-top">
           <button class="link-btn" onClick={onClose}>Cancel</button>
-          <button class="btn" disabled={busy || !ready} onClick={send}>{busy ? 'Sending…' : parent ? 'Reply' : 'Cast'}</button>
+          <button class="btn" disabled={busy || !ready} onClick={send}>{busy ? 'Sending…' : parts.length > 1 ? 'Post all' : parent ? 'Reply' : 'Cast'}</button>
         </div>
         {parent && (
           <div class="ctx">
@@ -130,47 +207,21 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
             <div><b>{parent.author.display_name || handle(parent.author)}</b> <span class="handle">@{handle(parent.author)}</span><p>{parent.text.slice(0, 200)}</p></div>
           </div>
         )}
-        <div class="editor">
-          {account && <Avatar u={users.get(account.fid!) || { fid: account.fid!, username: account.username }} size={36} link={false} />}
-          <textarea ref={ref} value={text} rows={3} placeholder={parent ? `Reply to @${handle(parent.author)}` : quote ? 'Add a comment' : "What's happening?"}
-            onInput={(e) => (setText(e.currentTarget.value), findToken(e.currentTarget), (e.currentTarget.style.height = 'auto'), (e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px'))}
-            onKeyDown={keys} onClick={(e) => findToken(e.currentTarget)}
-            onPaste={(e) => e.clipboardData?.files.length && (e.preventDefault(), attach(e.clipboardData.files))} />
+        <div class="parts">
+          {parts.map((p, i) => (
+            <PartEditor key={p.id} part={p} set={(x) => update(p.id, x)} first={i === 0} last={i === parts.length - 1} quote={quote} focus={i === active}
+              onFocus={() => setActive(i)} attach={attach}
+              placeholder={i > 0 ? 'Add another post' : parent ? `Reply to @${handle(parent.author)}` : quote ? 'Add a comment' : "What's happening?"} />
+          ))}
         </div>
-        {tok && sug.length > 0 && (
-          <div class="mentions" role="listbox">
-            {sug.map((u, i) => (
-              <button role="option" aria-selected={i === sel} class={i === sel ? 'on' : ''} onMouseDown={(e) => (e.preventDefault(), mention(u))}>
-                <Avatar u={u} size={28} link={false} />
-                <b>{u.display_name || u.username}</b><span class="handle">@{u.username}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {files.length > 0 && (
-          <div class="attachments">
-            {files.map((f) => (
-              <div class={`att${f.err ? ' bad' : ''}`}>
-                {f.video ? <video src={f.preview} muted /> : <img src={f.preview} alt="" />}
-                {!f.url && !f.err && (
-                  <span class="att-busy">
-                    <span class="spinner small" />
-                    <span class="att-stage">{f.stage === 'processing' ? (f.video ? 'Processing video…' : 'Finishing…') : `Uploading ${f.pct ?? 0}%`}</span>
-                    {f.stage !== 'processing' && <span class="att-bar"><i style={{ width: `${f.pct ?? 0}%` }} /></span>}
-                  </span>
-                )}
-                {f.err && <span class="att-err">{f.err}</span>}
-                <button class="att-x" aria-label="Remove" onClick={() => setFiles((fs) => fs.filter((x) => x.id !== f.id))}><Icon d={P.x} size={14} /></button>
-              </div>
-            ))}
-          </div>
-        )}
-        {quote && <QuoteCard c={quote} />}
         <div class="toolbar">
           <input ref={pick} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple hidden onChange={(e) => (attach(e.currentTarget.files), (e.currentTarget.value = ''))} />
-          <button class="icon-btn" aria-label="Add photo or video" disabled={files.length >= slots} onClick={() => pick.current?.click()}><Icon d={P.image} /></button>
+          <button class="icon-btn" aria-label="Add photo or video" disabled={cur.files.length >= 2 - (active === 0 && quote ? 1 : 0)} onClick={() => pick.current?.click()}><Icon d={P.image} /></button>
           {!parent && <ChannelPicker value={channel} set={setChannel} />}
-          <span class={`count${left < 20 ? ' warn' : ''}`}>{left}</span>
+          <span class={`count${left < 50 ? ' warn' : ''}`} title={bytes(cur.text) > 320 ? 'Long cast: up to 1024 characters' : 'Up to 320 characters, or 1024 as a long cast'}>
+            {bytes(cur.text) > 280 ? left : ''}
+          </span>
+          <button class="icon-btn add-part" aria-label="Add another post to the thread" disabled={!filled(cur, active)} onClick={add}><Icon d="M12 5v14M5 12h14" /></button>
         </div>
       </div>
     </div>

@@ -58,6 +58,8 @@ export const castBody = (c: { text: string; mentions?: number[]; positions?: num
     [4, c.text],
     [5, c.positions],
     ...(c.embeds || []).map((e): Field => [6, typeof e === 'string' ? pb([1, e]) : pb([2, castId(e.fid, e.hash)])]),
+    // over 320 bytes must be marked LONG_CAST (allowed up to 1024)
+    [8, new TextEncoder().encode(c.text).length > 320 ? 1 : undefined],
   )
 export const reactionBody = (type: 1 | 2, fid: number, hash: string) => pb([1, type], [2, castId(fid, hash)])
 export const followBody = (fid: number) => pb([1, 'follow'], [3, fid])

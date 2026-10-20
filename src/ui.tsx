@@ -187,7 +187,7 @@ const unfurl = (u: string) => {
 }
 
 // Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives
-function LinkCard({ u }: { u: string }) {
+export function LinkCard({ u }: { u: string }) {
   const [d, setD] = useState<Unfurl | undefined>(undefined)
   useEffect(() => void unfurl(u).then(setD), [u])
   let host = ''

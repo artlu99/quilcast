@@ -10,7 +10,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const FC = 'https://client.farcaster.xyz'
@@ -115,14 +115,18 @@ export async function chunk(req, id, offset) {
   if (offset !== job.received) return { received: job.received }
   const out = createWriteStream(job.file, { flags: 'a' })
   let n = 0
-  for await (const c of req) {
-    if ((n += c.length) > CHUNK || job.received + n > job.size) {
-      out.destroy()
-      throw fail(413, 'chunk too large')
+  try {
+    for await (const c of req) {
+      if ((n += c.length) > CHUNK || job.received + n > job.size) throw fail(413, 'chunk too large')
+      if (!out.write(c)) await new Promise((r) => out.once('drain', r))
     }
-    if (!out.write(c)) await new Promise((r) => out.once('drain', r))
+    await new Promise((r, e) => out.end((err) => (err ? e(err) : r())))
+  } catch (e) {
+    // a chunk cut off halfway must not leave its bytes behind, or the retry would land after them
+    await new Promise((r) => out.destroy() && out.once('close', r))
+    await truncate(job.file, job.received).catch(() => {})
+    throw e
   }
-  await new Promise((r, e) => out.end((err) => (err ? e(err) : r())))
   job.received = (await stat(job.file)).size
   return { received: job.received }
 }

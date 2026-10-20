@@ -62,7 +62,7 @@ const put = (url: string, body: Blob, onSent: (n: number) => void) =>
     x.send(body)
   })
 
-export type Progress = (stage: 'uploading' | 'processing', fraction?: number) => void
+export type Progress = (stage: 'uploading' | 'processing', fraction?: number, secondsLeft?: number) => void
 
 /** Upload a file in chunks through our server, which passes it to Farcaster's CDN (or keeps it).
  *  Authorized by a farcaster.xyz token request signed with the custody key. Returns the embed URL. */
@@ -73,14 +73,25 @@ export async function upload(file: Blob, progress: Progress = () => {}) {
   const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${exp},"timestamp":${ts}}}`)
   const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), custodyKey(account!.phrase))
   const headers = { 'content-type': file.type, authorization: `Bearer eip191:${btoa(String.fromCharCode(...rs, v + 27))}`, 'x-auth-request': JSON.stringify(authRequest), 'x-fid': String(account!.fid), 'x-size': String(file.size) }
-  const { id, chunk } = await json(await fetch('/api/upload', { method: 'POST', headers }))
+  const { id, chunk: max } = await json(await fetch('/api/upload', { method: 'POST', headers }))
   progress('uploading', 0)
+  // each request must finish well inside the proxy's 60 s, so chunks grow on fast links and shrink on slow ones
+  let size = 512 * 1024
+  const began = Date.now()
   for (let off = 0, tries = 0; off < file.size; ) {
+    const t = Date.now()
     try {
-      off = (await put(`/api/upload/${id}?offset=${off}`, file.slice(off, off + chunk), (n) => progress('uploading', Math.min(1, (off + n) / file.size)))).received
+      off = (await put(`/api/upload/${id}?offset=${off}`, file.slice(off, off + size), (n) => {
+        const done = off + n
+        const rate = done / Math.max(1, (Date.now() - began) / 1000)
+        progress('uploading', Math.min(1, done / file.size), (file.size - done) / rate)
+      })).received
+      const took = (Date.now() - t) / 1000
+      size = took < 5 ? Math.min(max, size * 2) : took > 20 ? Math.max(128 * 1024, size / 2) : size
       tries = 0
     } catch (e) {
-      if (++tries > 3) throw e
+      size = Math.max(128 * 1024, size / 2)
+      if (++tries > 4) throw e
       await new Promise((r) => setTimeout(r, 1000 * tries))
     }
   }
