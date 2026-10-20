@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { account, get, go, users, type Cast, type User } from './api.ts'
 import { Avatar, channelUrl, handle, Icon, P, QuoteCard, toast, w } from './ui.tsx'
 
-type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string }
+type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string; stage?: 'uploading' | 'processing'; pct?: number }
 const bytes = (s: string) => new TextEncoder().encode(s).length
 
 // photos are re-encoded (≤2048px JPEG) so EXIF/GPS never leaves the device; GIFs and videos go as-is
@@ -95,7 +95,7 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
       const update = (p: Partial<Attachment>) => setFiles((fs) => fs.map((f) => (f.id === a.id ? { ...f, ...p } : f)))
       setFiles((fs) => [...fs, a])
       shrink(file)
-        .then(async (blob) => (await w()).upload(blob))
+        .then(async (blob) => (await w()).upload(blob, (stage, f) => update({ stage, pct: f === undefined ? undefined : Math.round(f * 100) })))
         .then((url) => update({ url }), (e) => update({ err: e.message }))
     }
   }
@@ -152,7 +152,13 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
             {files.map((f) => (
               <div class={`att${f.err ? ' bad' : ''}`}>
                 {f.video ? <video src={f.preview} muted /> : <img src={f.preview} alt="" />}
-                {!f.url && !f.err && <span class="att-busy"><span class="spinner small" /></span>}
+                {!f.url && !f.err && (
+                  <span class="att-busy">
+                    <span class="spinner small" />
+                    <span class="att-stage">{f.stage === 'processing' ? (f.video ? 'Processing video…' : 'Finishing…') : `Uploading ${f.pct ?? 0}%`}</span>
+                    {f.stage !== 'processing' && <span class="att-bar"><i style={{ width: `${f.pct ?? 0}%` }} /></span>}
+                  </span>
+                )}
                 {f.err && <span class="att-err">{f.err}</span>}
                 <button class="att-x" aria-label="Remove" onClick={() => setFiles((fs) => fs.filter((x) => x.id !== f.id))}><Icon d={P.x} size={14} /></button>
               </div>

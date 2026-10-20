@@ -159,7 +159,27 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
   )
 }
 
-type Unfurl = { url: string; title?: string; description?: string; site?: string; image?: string; button?: string; icon?: string } | null
+type Tweet = { text: string; author: { name?: string; handle?: string; avatar?: string }; at?: number; photos: string[]; video?: string; likes?: number; replies?: number; reposts?: number; quote?: { name?: string; handle?: string; text?: string } }
+type Unfurl = { url: string; title?: string; description?: string; site?: string; image?: string; button?: string; icon?: string; tweet?: Tweet } | null
+
+const X_LOGO = 'M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.19L2 3h6.33l4.37 5.77zm-1.08 16.17h1.7L7.4 4.74H5.58z'
+function TweetCard({ u, t }: { u: string; t: Tweet }) {
+  return (
+    <div class="tweet" onClick={(e) => (stop(e), open(u, '_blank', 'noopener'))} role="link" tabIndex={0}>
+      <div class="tw-head">
+        {t.author.avatar && <img class="tw-av" src={t.author.avatar} alt="" loading="lazy" referrerpolicy="no-referrer" />}
+        <b>{t.author.name}</b><span class="handle">@{t.author.handle}</span>
+        {t.at && <span class="handle">· {ago(new Date(t.at * 1000).toISOString())}</span>}
+        <svg class="tw-x" viewBox="0 0 24 24" width="16" height="16" aria-label="X"><path d={X_LOGO} fill="currentColor" /></svg>
+      </div>
+      {t.text && <RichText text={t.text.replace(/\s*https:\/\/t\.co\/\S+$/, '')} class="text tw-text" />}
+      {t.photos.length > 0 && <Media urls={t.photos} />}
+      {!t.photos.length && t.video && <div class="tw-video"><img src={t.video} alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="play"><Icon d={P.play} fill size={24} /></span></div>}
+      {t.quote && <div class="tw-quote"><b>{t.quote.name}</b> <span class="handle">@{t.quote.handle}</span><p>{t.quote.text}</p></div>}
+      <div class="tw-stats"><span>{n(t.replies)} replies</span><span>{n(t.reposts)} reposts</span><span>{n(t.likes)} likes</span></div>
+    </div>
+  )
+}
 const unfurls = new Map<string, Promise<Unfurl>>()
 const unfurl = (u: string) => {
   if (!unfurls.has(u)) unfurls.set(u, fetch(`/api/unfurl?url=${encodeURIComponent(u)}`).then((r) => r.json(), () => null))
@@ -176,6 +196,7 @@ function LinkCard({ u }: { u: string }) {
   } catch {
     return null
   }
+  if (d?.tweet) return <TweetCard u={u} t={d.tweet} />
   // a link straight to an image renders as the image
   if (d?.image && d.image === d.url) return <Media urls={[d.image]} />
   const meta = (

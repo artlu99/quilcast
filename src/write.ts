@@ -46,18 +46,52 @@ export async function post(text: string, o: { parent?: CastRef; channel?: string
   return send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
 }
 
-/** Upload a file through our server to Farcaster's CDN (or our own storage), authorized by a
- *  10-minute farcaster.xyz token request signed with the custody key. Returns the embed URL. */
-export async function upload(file: Blob) {
-  const ts = Date.now()
-  const authRequest = { method: 'generateToken', params: { timestamp: ts, expiresAt: ts + 600e3 } }
-  const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${ts + 600e3},"timestamp":${ts}}}`)
-  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), custodyKey(account!.phrase))
-  const bearer = 'eip191:' + btoa(String.fromCharCode(...rs, v + 27))
-  const r = await fetch('/api/upload', { method: 'POST', headers: { 'content-type': file.type, authorization: `Bearer ${bearer}`, 'x-auth-request': JSON.stringify(authRequest), 'x-fid': String(account!.fid) }, body: file })
+const json = async (r: Response) => {
   const j = await r.json().catch(() => ({}))
-  if (!r.ok || !j.url) throw new Error(j.error || `Upload failed (${r.status})`)
-  return j.url as string
+  if (!r.ok) throw new Error(j.error || `Upload failed (${r.status})`)
+  return j
+}
+// XHR rather than fetch, for upload progress events
+const put = (url: string, body: Blob, onSent: (n: number) => void) =>
+  new Promise<{ received: number }>((resolve, reject) => {
+    const x = new XMLHttpRequest()
+    x.open('PUT', url)
+    x.upload.onprogress = (e) => onSent(e.loaded)
+    x.onload = () => (x.status < 300 ? resolve(JSON.parse(x.responseText)) : reject(new Error(JSON.parse(x.responseText || '{}').error || `Upload failed (${x.status})`)))
+    x.onerror = () => reject(new Error('Network error'))
+    x.send(body)
+  })
+
+export type Progress = (stage: 'uploading' | 'processing', fraction?: number) => void
+
+/** Upload a file in chunks through our server, which passes it to Farcaster's CDN (or keeps it).
+ *  Authorized by a farcaster.xyz token request signed with the custody key. Returns the embed URL. */
+export async function upload(file: Blob, progress: Progress = () => {}) {
+  const ts = Date.now()
+  const exp = ts + 3500e3
+  const authRequest = { method: 'generateToken', params: { timestamp: ts, expiresAt: exp } }
+  const msg = new TextEncoder().encode(`{"method":"generateToken","params":{"expiresAt":${exp},"timestamp":${ts}}}`)
+  const { rs, v } = ecSign(keccak_256(concat(new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), msg)), custodyKey(account!.phrase))
+  const headers = { 'content-type': file.type, authorization: `Bearer eip191:${btoa(String.fromCharCode(...rs, v + 27))}`, 'x-auth-request': JSON.stringify(authRequest), 'x-fid': String(account!.fid), 'x-size': String(file.size) }
+  const { id, chunk } = await json(await fetch('/api/upload', { method: 'POST', headers }))
+  progress('uploading', 0)
+  for (let off = 0, tries = 0; off < file.size; ) {
+    try {
+      off = (await put(`/api/upload/${id}?offset=${off}`, file.slice(off, off + chunk), (n) => progress('uploading', Math.min(1, (off + n) / file.size)))).received
+      tries = 0
+    } catch (e) {
+      if (++tries > 3) throw e
+      await new Promise((r) => setTimeout(r, 1000 * tries))
+    }
+  }
+  progress('processing')
+  let st = await json(await fetch(`/api/upload/${id}/done`, { method: 'POST' }))
+  while (st.state === 'sending' || st.state === 'processing') {
+    await new Promise((r) => setTimeout(r, 1500))
+    st = await json(await fetch(`/api/upload/${id}`))
+  }
+  if (st.state !== 'ready' || !st.url) throw new Error(st.error || 'Upload failed')
+  return st.url as string
 }
 
 export const deleteCast = (hash: string) => send(MT.CAST_REMOVE, castRemoveBody(hash))

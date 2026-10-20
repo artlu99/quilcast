@@ -65,10 +65,31 @@ async function read(url) {
   }
 }
 
+// X posts: fxtwitter's public API returns the post itself, which X's own pages don't give bots
+async function tweet(url) {
+  const m = url.match(/^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/([^/?#]+)\/status(?:es)?\/(\d+)/i)
+  if (!m) return
+  const r = await fetch(`https://api.fxtwitter.com/${m[1]}/status/${m[2]}`, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(5000) })
+  const t = (await r.json()).tweet
+  if (!t) return null
+  return {
+    url,
+    tweet: {
+      text: t.text,
+      author: { name: t.author?.name, handle: t.author?.screen_name, avatar: t.author?.avatar_url },
+      at: t.created_timestamp,
+      photos: (t.media?.photos || []).map((p) => p.url).slice(0, 4),
+      video: t.media?.videos?.[0]?.thumbnail_url,
+      likes: t.likes, replies: t.replies, reposts: t.retweets,
+      quote: t.quote && { name: t.quote.author?.name, handle: t.quote.author?.screen_name, text: t.quote.text },
+    },
+  }
+}
+
 export async function unfurl(url) {
   if (!cache.has(url)) {
     cache.size > 2000 && cache.delete(cache.keys().next().value)
-    cache.set(url, read(url).catch(() => null))
+    cache.set(url, tweet(url).then((t) => (t === undefined ? read(url) : t)).catch(() => null))
   }
   return cache.get(url)
 }
