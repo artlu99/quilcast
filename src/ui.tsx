@@ -91,7 +91,8 @@ export function Video({ src }: { src: string }) {
   const [ready, setReady] = useState(!hls)
   const start = async (e: Event) => {
     e.stopPropagation()
-    const { default: Hls } = await import('hls.js/light')
+    // the full build: Farcaster's streams carry audio as a separate rendition, which hls.js/light drops
+    const { default: Hls } = await import('hls.js')
     const h = new Hls()
     h.loadSource(src)
     h.attachMedia(ref.current!)
