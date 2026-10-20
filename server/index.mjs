@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize } from 'node:path'
+import { unfurl } from './unfurl.mjs'
 import { EXT, MEDIA, upload } from './upload.mjs'
 
 const NODE = process.env.NODE_URL || 'https://haatz.quilibrium.com'
@@ -117,6 +118,11 @@ createServer(async (req, res) => {
       const err = url instanceof Error
       if (err && !url.status) console.error('upload', url)
       return res.writeHead(err ? url.status || 500 : 200, { 'content-type': 'application/json' }).end(JSON.stringify(err ? { error: url.status ? url.message : 'Upload failed' } : { url }))
+    }
+    if (path === '/api/unfurl') {
+      const target = new URL(req.url, 'http://x').searchParams.get('url') || ''
+      const data = /^https?:\/\//.test(target) && target.length < 2048 ? await unfurl(target) : null
+      return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=86400' }).end(JSON.stringify(data))
     }
     const media = path.match(/^\/m\/([0-9a-f]{24}\.(\w+))$/)
     if (media) {

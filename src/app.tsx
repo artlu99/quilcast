@@ -1,8 +1,8 @@
 import { render, type ComponentChildren } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, back, get, go, hydrateParents, isFollowing, loadMine, saveSettings, setAccount, settings, users, USER_DATA, type Cast, type User } from './api.ts'
+import { account, accounts, back, get, go, hydrateParents, isFollowing, loadMine, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
-import { Avatar, CastCard, handle, Icon, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, Avatar, CastCard, handle, Icon, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
 
 function Join() {
@@ -36,11 +36,59 @@ const Tabs = <T extends string>({ tabs, value, set }: { tabs: [T, string][]; val
   </nav>
 )
 
+// every saved account with a way to switch, plus "Add account"
+function AccountList({ onDone }: { onDone?: () => void }) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const fids = accounts.map((a) => a.fid).filter((f): f is number => !!f && !users.has(f))
+    fids.length && get('/v2/farcaster/user/bulk', { fids: fids.join(',') }).then((r) => (r.users.forEach((u: User) => users.set(u.fid, u)), force((x) => x + 1)), () => {})
+  }, [])
+  return (
+    <div class="accounts">
+      {accounts.map((a) => {
+        const u = (a.fid && users.get(a.fid)) || { fid: a.fid || 0, username: a.username }
+        const on = a.phrase === account?.phrase
+        return (
+          <button class={`acct${on ? ' on' : ''}`} onClick={() => (on ? onDone?.() : switchAccount(a))}>
+            <Avatar u={u} size={32} link={false} />
+            <span><b>{u.display_name || a.display || (a.username ? `@${a.username}` : 'New account')}</b><small>{a.done ? `@${handle(u)}` : 'Setting up'}</small></span>
+            {on && <Icon d="M20 6 9 17l-5-5" />}
+          </button>
+        )
+      })}
+      <button class="acct add" onClick={() => (onDone?.(), go('/join'))}><span class="plus"><Icon d="M12 5v14M5 12h14" /></span><span><b>Add account</b></span></button>
+    </div>
+  )
+}
+
+function AccountMenu({ me }: { me: User }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const f = (e: MouseEvent) => !(e.target as Element).closest('.me-wrap') && setOpen(false)
+    addEventListener('click', f)
+    return () => removeEventListener('click', f)
+  }, [open])
+  return (
+    <div class="me-wrap">
+      {open && <div class="menu up"><AccountList onDone={() => setOpen(false)} /></div>}
+      <button class="me" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Avatar u={me} size={34} link={false} />
+        <span><b>{me.display_name || handle(me)}</b><small>@{handle(me)}</small></span>
+        <Icon d={P.more} />
+      </button>
+    </div>
+  )
+}
+
 // --- paginated list of casts ---
 
 type Page = { casts: Cast[]; next?: { cursor?: string | null } }
-function Feed({ load, k, empty }: { load: (cursor?: string) => Promise<Page>; k: string; empty?: string }) {
-  const [items, setItems] = useState<Cast[]>([])
+type Chunk<T> = { items: T[]; cursor: string | null }
+
+/** Cursor pagination with infinite scroll. `id` dedupes items across pages. */
+function Pager<T>({ load, k, empty, id, row }: { load: (cursor?: string) => Promise<Chunk<T>>; k: string; empty?: string; id: (t: T) => string; row: (items: T[]) => ComponentChildren }) {
+  const [items, setItems] = useState<T[]>([])
   const [cursor, setCursor] = useState<string | null | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -54,12 +102,11 @@ function Feed({ load, k, empty }: { load: (cursor?: string) => Promise<Page>; k:
     try {
       const r = await load(reset ? undefined : cursor || undefined)
       if (state.current.key !== k) return
-      await hydrateParents(r.casts)
       setItems((prev) => {
-        const seen = new Set(reset ? [] : prev.map((c) => c.hash))
-        return [...(reset ? [] : prev), ...r.casts.filter((c) => !seen.has(c.hash))]
+        const seen = new Set(reset ? [] : prev.map(id))
+        return [...(reset ? [] : prev), ...r.items.filter((t) => !seen.has(id(t)))]
       })
-      setCursor(r.casts.length ? r.next?.cursor || null : null)
+      setCursor(r.cursor)
     } catch (e: any) {
       setErr(e.message)
     } finally {
@@ -74,20 +121,31 @@ function Feed({ load, k, empty }: { load: (cursor?: string) => Promise<Page>; k:
     more(true)
   }, [k])
   useEffect(() => {
-    const o = new IntersectionObserver((e) => e[0].isIntersecting && items.length && more(), { rootMargin: '800px' })
+    // re-armed after every render, so pages that filter down to nothing keep loading
+    const o = new IntersectionObserver((e) => e[0].isIntersecting && cursor && more(), { rootMargin: '800px' })
     sentinel.current && o.observe(sentinel.current)
     return () => o.disconnect()
   })
   return (
     <>
-      {items.map((c) => <CastCard key={c.hash} c={c} />)}
+      {row(items)}
       {err && <div class="note">Couldn't load: {err} <button class="link-btn" onClick={() => more()}>Retry</button></div>}
       {busy && <div class="spinner" aria-label="Loading" />}
-      {cursor === null && !items.length && !err && <div class="note">{empty || 'Nothing here yet.'}</div>}
+      {cursor === null && !items.length && !err && !busy && <div class="note">{empty || 'Nothing here yet.'}</div>}
       <div ref={sentinel} />
     </>
   )
 }
+
+const Feed = ({ load, k, empty, keep }: { load: (cursor?: string) => Promise<Page>; k: string; empty?: string; keep?: (c: Cast) => boolean }) => (
+  <Pager<Cast> k={k} empty={empty} id={(c) => c.hash} row={(cs) => cs.map((c) => <CastCard key={c.hash} c={c} />)}
+    load={async (cursor) => {
+      const r = await load(cursor)
+      const casts = keep ? r.casts.filter(keep) : r.casts
+      await hydrateParents(casts)
+      return { items: casts, cursor: r.casts.length ? r.next?.cursor || null : null }
+    }} />
+)
 
 // --- views ---
 
@@ -104,10 +162,92 @@ function Home() {
           <a class="btn small" href="/join">Join</a>
         </div>
       )}
-      <Feed k={tab} empty="Follow a few people and their casts will show up here."
+      <Feed k={tab} empty="Follow a few people and their casts will show up here." keep={(c) => !c.parent_hash}
         load={(cursor) => (tab === 'following' ? get('/v2/farcaster/feed/following', { fid: account!.fid, limit: 25, cursor }) : get('/v2/farcaster/feed/trending', { limit: 25, cursor }))} />
     </>
   )
+}
+
+type Note = { type: string; cast?: Cast | null; user: User; timestamp: string }
+type Group = { key: string; type: string; cast?: Cast | null; users: User[]; timestamp: string }
+const seenKey = () => `quilcast:seen:${account?.fid}`
+const ACT: Record<string, [string, string, string]> = {
+  likes: ['liked your cast', P.like, 'lk'],
+  recasts: ['recast your cast', P.recast, 'rc'],
+  follows: ['followed you', P.user, 'fo'],
+}
+
+function NoteRow({ g }: { g: Group }) {
+  if (g.cast && !ACT[g.type]) return <CastCard c={g.cast} />
+  const [verb, icon, cls] = ACT[g.type] || [g.type, P.user, 'fo']
+  const first = g.users[0]
+  return (
+    <a class="note-row" href={g.cast ? `/c/${g.cast.hash}` : userPath(first)}>
+      <span class={`note-icon ${cls}`}><Icon d={icon} fill={g.type === 'likes'} size={20} /></span>
+      <span class="note-body">
+        <span class="note-avatars">{g.users.slice(0, 7).map((u) => <Avatar u={u} size={30} link={false} />)}</span>
+        <span><b>{first.display_name || handle(first)}</b>{g.users.length > 1 && ` and ${g.users.length - 1} ${g.users.length === 2 ? 'other' : 'others'}`} {verb} <span class="muted">· {ago(g.timestamp)}</span></span>
+        {g.cast && <span class="note-cast">{g.cast.text || 'Your cast'}</span>}
+      </span>
+    </a>
+  )
+}
+
+// group likes/recasts per cast and follows per day; replies and mentions stay one per cast
+const group = (notes: Note[]) => {
+  const out = new Map<string, Group>()
+  for (const n of notes) {
+    const key = ACT[n.type] ? `${n.type}:${n.cast?.hash || n.timestamp.slice(0, 10)}` : `${n.type}:${n.cast?.hash}:${n.user.fid}`
+    const g = out.get(key)
+    if (g) !g.users.some((u) => u.fid === n.user.fid) && g.users.push(n.user)
+    else out.set(key, { key, type: n.type, cast: n.cast, users: [n.user], timestamp: n.timestamp })
+  }
+  return [...out.values()]
+}
+
+function Notifications() {
+  const [tab, setTab] = useState<'all' | 'replies'>('all')
+  useEffect(() => {
+    // opening the page marks everything up to now as seen
+    localStorage.setItem(seenKey(), String(Date.now()))
+    dispatchEvent(new Event('seen'))
+  }, [])
+  if (!account?.done) return <><Header title="Notifications" /><div class="note">Sign in to see who replied, liked and followed.</div></>
+  return (
+    <>
+      <Header title="Notifications">
+        <Tabs tabs={[['all', 'All'], ['replies', 'Replies & mentions']]} value={tab} set={setTab} />
+      </Header>
+      <Pager<Note> k={tab} empty="Nothing yet. When people reply, like or follow you, it shows up here."
+        id={(n) => `${n.type}:${n.cast?.hash}:${n.user.fid}:${n.timestamp}`}
+        row={(ns) => group(ns).map((g) => <NoteRow key={g.key} g={g} />)}
+        load={async (cursor) => {
+          const r = await get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor })
+          const items = (r.notifications as Note[]).filter((n) => n.user && (tab === 'all' || (n.cast && !ACT[n.type])))
+          await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
+          return { items, cursor: r.notifications.length ? r.next?.cursor || null : null }
+        }} />
+    </>
+  )
+}
+
+/** True when the newest notification is newer than the last visit to /notifications. */
+function useUnread() {
+  const [unread, setUnread] = useState(false)
+  useEffect(() => {
+    if (!account?.done) return
+    const check = () =>
+      get('/v2/farcaster/notifications', { fid: account!.fid, limit: 1 }).then((r) => {
+        const t = r.notifications[0] && Date.parse(r.notifications[0].timestamp)
+        setUnread(!!t && t > Number(localStorage.getItem(seenKey()) || 0))
+      }, () => {})
+    check()
+    const i = setInterval(check, 60000)
+    const seen = () => setUnread(false)
+    addEventListener('seen', seen)
+    return () => (clearInterval(i), removeEventListener('seen', seen))
+  }, [account?.fid])
+  return unread
 }
 
 function Thread({ hash }: { hash: string }) {
@@ -210,7 +350,7 @@ function Profile({ id }: { id: string }) {
             <div class="counts"><span><b>{n(u.following_count)}</b> following</span><span><b>{n((u.follower_count || 0) + +!!following - +was.current)}</b> followers</span></div>
           </section>
           <Tabs tabs={[['casts', 'Casts'], ['replies', 'Replies']]} value={tab} set={setTab} />
-          <Feed k={`${u.fid}${tab}`} empty={tab === 'casts' ? 'No casts yet.' : 'No replies yet.'}
+          <Feed k={`${u.fid}${tab}`} empty={tab === 'casts' ? 'No casts yet.' : 'No replies yet.'} keep={tab === 'casts' ? (c) => !c.parent_hash : (c) => !!c.parent_hash}
             load={(cursor) => get(tab === 'casts' ? '/v2/farcaster/feed/user/casts' : '/v2/farcaster/feed/user/replies_and_recasts', { fid: u.fid, limit: 25, cursor })} />
         </>
       )}
@@ -312,6 +452,12 @@ function Settings() {
     <>
       <Header title="Settings" />
       <div class="settings">
+        {accounts.length > 0 && (
+          <section>
+            <h2>Accounts</h2>
+            <AccountList />
+          </section>
+        )}
         {account?.done && (
           <section>
             <h2>Profile</h2>
@@ -327,7 +473,7 @@ function Settings() {
           </section>
         )}
         <section>
-          <div class="line">
+          <div class="setting">
             <h2>Theme</h2>
             <div class="seg">
               {['system', 'light', 'dark'].map((t) => <button class={settings.theme === t ? 'on' : ''} onClick={() => ((settings.theme = t), saveSettings(), applyTheme(), force((x) => x + 1))}>{t[0].toUpperCase() + t.slice(1)}</button>)}
@@ -338,10 +484,10 @@ function Settings() {
           <section>
             <h2>Keys</h2>
             <p class="hint">Your recovery phrase controls your account and also works in Quorum and Warpcast. It lives only in this browser, so keep a copy somewhere safe.</p>
-            <div class="line"><span>Recovery phrase</span><span class="btns"><button class="btn ghost small" onClick={() => setPhrase(!phrase)}>{phrase ? 'Hide' : 'Show'}</button><button class="btn ghost small" onClick={() => navigator.clipboard.writeText(account!.phrase).then(() => toast('Copied'))}>Copy</button></span></div>
+            <div class="setting"><span>Recovery phrase</span><span class="btns"><button class="btn ghost small" onClick={() => setPhrase(!phrase)}>{phrase ? 'Hide' : 'Show'}</button><button class="btn ghost small" onClick={() => navigator.clipboard.writeText(account!.phrase).then(() => toast('Copied'))}>Copy</button></span></div>
             {phrase && <code class="phrase">{account.phrase}</code>}
-            <div class="line"><span>All keys as a file</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
-            <div class="line"><span>Sign out of this browser</span><button class="btn danger small" onClick={() => (out ? (setAccount(null), go('/')) : setOut(true))}>{out ? 'Erase keys?' : 'Sign out'}</button></div>
+            <div class="setting"><span>All keys as a file</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
+            <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" onClick={() => (out ? (setAccount(null), location.assign('/')) : setOut(true))}>{out ? 'Erase keys?' : 'Sign out'}</button></div>
           </section>
         )}
         <section>
@@ -383,37 +529,37 @@ function App() {
   const [, force] = useState(0)
   const [compose, setCompose] = useState<Parameters<typeof shell.compose>[0] | null>(null)
   const [r0, r1] = useRoute()
+  const unread = useUnread()
   shell.compose = (o = {}) => setCompose(o)
   useEffect(() => {
     const f = () => force((x) => x + 1)
     addEventListener('account', f)
-    loadMine().then(f)
-    account?.fid && get('/v2/farcaster/user', { fid: account.fid }).then((r) => (users.set(account!.fid!, r.user), f()), () => {})
     return () => removeEventListener('account', f)
   }, [])
+  useEffect(() => {
+    const f = () => force((x) => x + 1)
+    loadMine().then(f)
+    account?.fid && get('/v2/farcaster/user', { fid: account.fid }).then((r) => (users.set(account!.fid!, r.user), f()), () => {})
+  }, [account?.fid])
   const me = account?.done ? users.get(account.fid!) || { fid: account.fid!, username: account.username } : null
   const view =
     r0 === 'c' ? <Thread hash={r1} />
       : r0 === 'u' ? <Profile id={decodeURIComponent(r1)} />
         : r0 === 'search' ? <Search />
+          : r0 === 'notifications' ? <Notifications />
           : r0 === 'settings' ? <Settings />
             : r0 === 'join' ? <><Header /><Join /></>
               : <Home />
-  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
+  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell] as [string, string, string]] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
   const href = (k: string) => (k === 'u' ? userPath(me!) : `/${k}`)
   const active = (k: string) => (k === 'u' ? r0 === 'u' && !!me && userPath(me) === `/u/${r1}` : r0 === k)
   return (
     <div class="app">
       <nav class="side" aria-label="Main">
         <a class="brand" href="/"><Logo size={30} /><span>Quilcast</span></a>
-        {nav.filter(([k]) => k !== 'join').map(([k, label, d]) => <a class={`navlink${active(k) ? ' on' : ''}`} href={href(k)}><Icon d={d} size={22} /><span>{label}</span></a>)}
+        {nav.filter(([k]) => k !== 'join').map(([k, label, d]) => <a class={`navlink${active(k) ? ' on' : ''}`} href={href(k)}><span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span><span>{label}</span></a>)}
         {me ? <button class="btn cast-btn" onClick={() => setCompose({})}><Icon d={P.pen} /><span>Cast</span></button> : <a class="btn cast-btn" href="/join" aria-label="Join"><Icon d={P.user} /><span>Join</span></a>}
-        {me && (
-          <a class="me" href={userPath(me)}>
-            <Avatar u={me} size={34} link={false} />
-            <span><b>{me.display_name || handle(me)}</b><small>@{handle(me)}</small></span>
-          </a>
-        )}
+        {me && <AccountMenu me={me} />}
       </nav>
       <main class="col">{view}</main>
       <aside class="extra">
@@ -425,7 +571,7 @@ function App() {
         </div>
       </aside>
       <nav class="tabbar" aria-label="Main">
-        {nav.map(([k, label, d]) => <a class={active(k) ? 'on' : ''} href={href(k)} aria-label={label}><Icon d={d} size={22} /></a>)}
+        {nav.map(([k, label, d]) => <a class={active(k) ? 'on' : ''} href={href(k)} aria-label={label}><span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span></a>)}
       </nav>
       {me && r0 !== 'join' && r0 !== 'settings' && <button class="fab" aria-label="New cast" onClick={() => setCompose({})}><Icon d={P.pen} size={22} /></button>}
       {compose && <Composer {...compose} onClose={() => setCompose(null)} />}

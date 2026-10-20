@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, get, go, users, type Cast } from './api.ts'
+import { account, get, go, users, type Cast, type User } from './api.ts'
 import { Avatar, channelUrl, handle, Icon, P, QuoteCard, toast, w } from './ui.tsx'
 
 type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string }
@@ -48,6 +48,41 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   const pick = useRef<HTMLInputElement>(null)
+  // @mention autocomplete: the "@word" right before the caret
+  const [tok, setTok] = useState<{ start: number; q: string } | null>(null)
+  const [sug, setSug] = useState<User[]>([])
+  const [sel, setSel] = useState(0)
+  const findToken = (el: HTMLTextAreaElement) => {
+    const m = el.value.slice(0, el.selectionStart).match(/(?:^|\s)@([a-z0-9][a-z0-9.-]*)$/i)
+    setTok(m ? { start: el.selectionStart - m[1].length - 1, q: m[1].toLowerCase() } : null)
+  }
+  useEffect(() => {
+    if (!tok) return setSug([])
+    const t = setTimeout(() => get('/v2/farcaster/user/search', { q: tok.q, limit: 30 }).then((r) => {
+      const rank = (u: User) => (u.username === tok.q ? 1e12 : u.username?.startsWith(tok.q) ? 1e10 : 0) + (u.follower_count || 0)
+      setSug(((r.users || []) as User[]).filter((u) => u.username && !u.username.startsWith('fid:')).sort((a, b) => rank(b) - rank(a)).slice(0, 6))
+      setSel(0)
+    }, () => {}), 200)
+    return () => clearTimeout(t)
+  }, [tok?.q])
+  const mention = (u: User) => {
+    const el = ref.current!
+    const end = el.selectionStart
+    const next = text.slice(0, tok!.start) + '@' + u.username + ' ' + text.slice(end)
+    setText(next)
+    setTok(null)
+    const caret = tok!.start + u.username!.length + 2
+    requestAnimationFrame(() => (el.focus(), el.setSelectionRange(caret, caret)))
+  }
+  const keys = (e: KeyboardEvent) => {
+    if (!sug.length || !tok) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') setSel((sel + (e.key === 'ArrowDown' ? 1 : sug.length - 1)) % sug.length)
+    else if (e.key === 'Enter' || e.key === 'Tab') mention(sug[sel])
+    else if (e.key === 'Escape') setTok(null)
+    else return
+    e.preventDefault()
+    e.stopPropagation()
+  }
   useEffect(() => ref.current?.focus(), [])
   const left = 320 - bytes(text)
   const slots = 2 - (quote ? 1 : 0)
@@ -98,9 +133,20 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
         <div class="editor">
           {account && <Avatar u={users.get(account.fid!) || { fid: account.fid!, username: account.username }} size={36} link={false} />}
           <textarea ref={ref} value={text} rows={3} placeholder={parent ? `Reply to @${handle(parent.author)}` : quote ? 'Add a comment' : "What's happening?"}
-            onInput={(e) => (setText(e.currentTarget.value), (e.currentTarget.style.height = 'auto'), (e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px'))}
+            onInput={(e) => (setText(e.currentTarget.value), findToken(e.currentTarget), (e.currentTarget.style.height = 'auto'), (e.currentTarget.style.height = e.currentTarget.scrollHeight + 'px'))}
+            onKeyDown={keys} onClick={(e) => findToken(e.currentTarget)}
             onPaste={(e) => e.clipboardData?.files.length && (e.preventDefault(), attach(e.clipboardData.files))} />
         </div>
+        {tok && sug.length > 0 && (
+          <div class="mentions" role="listbox">
+            {sug.map((u, i) => (
+              <button role="option" aria-selected={i === sel} class={i === sel ? 'on' : ''} onMouseDown={(e) => (e.preventDefault(), mention(u))}>
+                <Avatar u={u} size={28} link={false} />
+                <b>{u.display_name || u.username}</b><span class="handle">@{u.username}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {files.length > 0 && (
           <div class="attachments">
             {files.map((f) => (

@@ -6,7 +6,10 @@ Live at **[quilcast.com](https://quilcast.com)**.
 
 ## What it does
 
-- Following and trending feeds, threads with their parent casts, profiles with casts and replies
+- Following and trending feeds (top-level casts), threads with their parent casts, profiles with separate casts and replies tabs
+- Notifications: grouped likes, recasts and follows plus replies and mentions, with an unread dot
+- Several accounts per browser, switched from the account menu (bottom left) or Settings
+- Rich link previews (Open Graph and Farcaster mini app images) through `/api/unfurl`, and @mention autocomplete in the composer
 - Search for people and for cast text
 - Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel
 - Attach up to two photos or videos per cast. Photos are re-encoded in the browser (≤2048 px JPEG, no EXIF). Uploads go through `/api/upload` to Farcaster's CDN the way Quorum does it, using a 10-minute farcaster.xyz token the browser signs with your custody key. Farcaster only gives upload URLs to accounts that have a Warpcast signer, so other accounts' files are stored on the server and served from `/m/<hash>`
@@ -28,6 +31,7 @@ Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
 | `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
 | `server/upload.mjs` | `/api/upload`: Farcaster CDN relay with a local fallback |
+| `server/unfurl.mjs` | `/api/unfurl`: Open Graph metadata for link previews, public hosts only |
 
 The message encoders are checked byte for byte against `@farcaster/core`, `viem` and Quilibrium's `quorum-shared`.
 

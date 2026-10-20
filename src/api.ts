@@ -14,12 +14,33 @@ export const settings = load('quilcast:settings', { node: 'https://haatz.quilibr
 export const saveSettings = () => save('quilcast:settings', settings)
 
 export type Account = { phrase: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; done?: boolean }
-export let account: Account | null = localStorage.getItem('quilcast:account') ? load<Account>('quilcast:account', { phrase: '' }) : null
+const list = (k: string): Account[] => {
+  try {
+    return JSON.parse(localStorage.getItem(k) || '[]')
+  } catch {
+    return []
+  }
+}
+// every account this browser holds; `account` is the selected one (keyed by phrase)
+export let accounts = list('quilcast:accounts')
+const legacy = localStorage.getItem('quilcast:account')
+if (legacy && !accounts.length) accounts = [load<Account>('quilcast:account', { phrase: '' })]
+export let account: Account | null = accounts.find((a) => a.phrase === localStorage.getItem('quilcast:current')) || accounts[0] || null
+
+/** Save `a` (added or updated, matched by phrase) and select it; `null` removes the selected account. */
 export const setAccount = (a: Account | null) => {
-  account = a
-  a ? save('quilcast:account', a) : localStorage.removeItem('quilcast:account')
+  if (a) {
+    const i = accounts.findIndex((x) => x.phrase === a.phrase)
+    i < 0 ? accounts.push(a) : (accounts[i] = a)
+  } else accounts = accounts.filter((x) => x.phrase !== account?.phrase)
+  account = a || accounts.find((x) => x.done) || accounts[0] || null
+  save('quilcast:accounts', accounts)
+  account ? localStorage.setItem('quilcast:current', account.phrase) : localStorage.removeItem('quilcast:current')
+  localStorage.removeItem('quilcast:account')
   dispatchEvent(new Event('account'))
 }
+// a full reload is the simplest way to drop the previous account's feeds and likes
+export const switchAccount = (a: Account) => (localStorage.setItem('quilcast:current', a.phrase), location.assign('/'))
 
 let depth = 0
 export const go = (path: string) => {

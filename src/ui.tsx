@@ -30,6 +30,7 @@ export const P = {
   x: 'M18 6 6 18M6 6l12 12',
   play: 'M7 4v16l13-8z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0',
 }
 export const Icon = ({ d, fill, size = 18 }: { d: string; fill?: boolean; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={fill ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -118,18 +119,37 @@ export function Media({ urls }: { urls: string[] }) {
   )
 }
 
-const LinkCard = ({ u }: { u: string }) => {
-  let url: URL
+type Unfurl = { url: string; title?: string; description?: string; site?: string; image?: string; button?: string; icon?: string } | null
+const unfurls = new Map<string, Promise<Unfurl>>()
+const unfurl = (u: string) => {
+  if (!unfurls.has(u)) unfurls.set(u, fetch(`/api/unfurl?url=${encodeURIComponent(u)}`).then((r) => r.json(), () => null))
+  return unfurls.get(u)!
+}
+
+// Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives
+function LinkCard({ u }: { u: string }) {
+  const [d, setD] = useState<Unfurl | undefined>(undefined)
+  useEffect(() => void unfurl(u).then(setD), [u])
+  let host = ''
   try {
-    url = new URL(u)
+    host = new URL(u).hostname.replace(/^www\./, '')
   } catch {
     return null
   }
-  const path = (url.pathname + url.search).replace(/^\/$/, '')
+  // a link straight to an image renders as the image
+  if (d?.image && d.image === d.url) return <div class="imgs n1"><img src={d.image} alt="" loading="lazy" referrerpolicy="no-referrer" /></div>
+  const meta = (
+    <span class="lc-text">
+      <span class="lc-site">{d?.icon && <img src={d.icon} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}{d?.site || host}</span>
+      {d?.title && <b class="lc-title">{d.title}</b>}
+      {d?.description && <span class="lc-desc">{d.description}</span>}
+    </span>
+  )
   return (
-    <a class="linkcard" href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
-      <img src={`${url.origin}/favicon.ico`} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
-      <span><b>{url.hostname.replace(/^www\./, '')}</b>{path && <i>{path}</i>}</span>
+    <a class={`linkcard${d?.image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
+      {d?.image && <img class="lc-img" src={d.image} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
+      {meta}
+      {d?.button && <span class="lc-btn">{d.button}</span>}
     </a>
   )
 }

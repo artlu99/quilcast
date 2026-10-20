@@ -20,12 +20,11 @@ const finish = async (a: Account) => {
 export function Join() {
   const [mode, setMode] = useState<'pick' | 'create' | 'signin'>('pick')
   if (account && !account.done) return <Setup />
-  if (account?.done) return <div class="note">You're signed in. <a href="/">Go to your feed</a></div>
   if (mode === 'create') return <Create back={() => setMode('pick')} />
   if (mode === 'signin') return <SignIn back={() => setMode('pick')} />
   return (
     <div class="join">
-      <h1>Join Farcaster on Hypersnap</h1>
+      <h1>{account ? 'Add an account' : 'Join Farcaster on Hypersnap'}</h1>
       <p class="lede">Quilcast is a small, open client that reads from and posts to the Hypersnap network that Quilibrium runs. There is no server in between, and your keys stay in this browser.</p>
       <button class="choice" onClick={() => setMode('create')}>
         <b>Create a new account</b>
