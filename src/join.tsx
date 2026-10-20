@@ -12,7 +12,7 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,15}$/
 
 const finish = async (a: Account) => {
   const u = await get('/v2/farcaster/user', { fid: a.fid }).catch(() => null)
-  setAccount({ ...account!, username: u?.user?.username || a.username, done: true })
+  setAccount({ ...account!, username: a.username || u?.user?.username, done: true })
   await loadMine()
   go('/')
 }
@@ -199,7 +199,7 @@ function Setup() {
         </section>
       )}
       {err && <p class="warn">{err}</p>}
-      {step === 'fund' && !bal && <button class="link-btn danger" onClick={() => setAccount(null)}>Start over</button>}
+      {step === 'fund' && bal === 0n && <button class="link-btn danger" onClick={() => setAccount(null)}>Start over</button>}
     </div>
   )
 }

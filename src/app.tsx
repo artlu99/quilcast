@@ -254,8 +254,17 @@ function Thread({ hash, onReply }: { hash: string; onReply: (c: Cast) => void })
   const [c, setC] = useState<Cast | null>(null)
   const [err, setErr] = useState('')
   useEffect(() => {
+    let live = true
     setC(null)
-    get('/v2/farcaster/cast/conversation', { identifier: hash.replace(/^0x/, ''), type: 'hash', reply_depth: 2 }).then((r) => setC(r.conversation.cast), (e) => setErr(e.message))
+    setErr('')
+    // a cast we just posted can take a moment to be indexed, so retry a few times
+    const load = (tries: number): unknown =>
+      get('/v2/farcaster/cast/conversation', { identifier: hash.replace(/^0x/, ''), type: 'hash', reply_depth: 2 }).then(
+        (r) => live && setC(r.conversation.cast),
+        (e) => live && (tries ? setTimeout(() => load(tries - 1), 1500) : setErr(e.message)),
+      )
+    load(5)
+    return () => void (live = false)
   }, [hash])
   if (err) return <div class="note">This cast couldn't be found. It may have been deleted.</div>
   if (!c) return <div class="spinner" />
