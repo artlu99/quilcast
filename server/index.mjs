@@ -10,6 +10,7 @@ import { promisify } from 'node:util'
 import { brotliCompress, gzip } from 'node:zlib'
 import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from '../src/shared.ts'
 import { fetchJson, gate, imageInfo, keep, safeGet } from './net.mjs'
+import { dm } from './dm.mjs'
 import { cached, unfurl } from './unfurl.mjs'
 import { chunk, done, EXT, MEDIA, start, status } from './upload.mjs'
 
@@ -255,6 +256,14 @@ createServer(async (req, res) => {
       const err = r instanceof Error
       if (err && !r.status) console.error('upload', r)
       return json(err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Upload failed' } : r)
+    }
+
+    const op = path.match(/^\/api\/dm\/(\w{1,20})$/)?.[1]
+    if (op) {
+      if (limited(`dm:${ip}`, 240)) return json(429, { error: 'Slow down a little.' })
+      // a failure here says nothing about the request: it may hold someone's token or messages
+      const r = await dm(req, op, url).catch((e) => ({ status: e.status || 502, body: { error: e.status ? e.message : "farcaster.xyz didn't answer." } }))
+      return json(r.status, r.body)
     }
 
     if (path === '/api/unfurl') {

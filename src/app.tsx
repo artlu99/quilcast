@@ -1,16 +1,19 @@
 import { render, type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { account, accounts, back, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
+import { account, accounts, dm, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { castText, n } from './shared.ts'
-import { ago, Avatar, CastCard, fetchCast, handle, Icon, Lightbox, Logo, Menu, nameOf, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, Avatar, CastCard, fetchCast, handle, Header, Icon, Lightbox, Logo, Menu, nameOf, P, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
 
-function Join({ step }: { step?: string }) {
-  const [C, setC] = useState<((p: { step?: string }) => any) | null>(null)
-  useEffect(() => void import('./join.tsx').then((m) => setC(() => m.Join)), [])
-  return C ? <C step={step} /> : <div class="spinner" />
+// views most visits never open load when first needed
+const lazy = <P extends object>(load: () => Promise<(p: P) => any>) => (p: P) => {
+  const [C, setC] = useState<((p: any) => any) | null>(null)
+  useEffect(() => void load().then((c) => setC(() => c)), [])
+  return C ? <C {...p} /> : <div class="spinner" />
 }
+const Join = lazy<{ step?: string }>(() => import('./join.tsx').then((m) => m.Join))
+const Messages = lazy<{ id?: string }>(() => import('./messages.tsx').then((m) => m.Messages))
 
 // --- bits ---
 
@@ -20,23 +23,6 @@ function Toast() {
   shell.toast = (x) => (setM(x), clearTimeout(t.current), (t.current = window.setTimeout(() => setM(''), 3500)))
   return m ? <div class="toast" role="status">{m}</div> : null
 }
-
-const Header = ({ title, back: showBack = true, children }: { title?: ComponentChildren; back?: boolean; children?: ComponentChildren }) => (
-  <div class="phead">
-    <div class="phead-row">
-      {showBack ? <button class="icon-btn" aria-label="Back" onClick={back}><Icon d={P.back} /></button> : <a class="brand only-mobile" href="/" aria-label="Quilcast home"><Logo size={26} /></a>}
-      <h1>{title}</h1>
-    </div>
-    {children}
-  </div>
-)
-
-const Tabs = <T extends string>({ tabs, value, set }: { tabs: [T, string][]; value: T; set: (t: T) => void }) => (
-  <nav class="tabs" role="tablist">
-    {/* a list under tabs in the sticky header starts at its top, not wherever the previous one was scrolled to */}
-    {tabs.map(([k, label]) => <button role="tab" aria-selected={value === k} class={value === k ? 'on' : ''} onClick={(e) => (e.currentTarget.closest('.phead') && scrollTo(0, 0), set(k))}>{label}</button>)}
-  </nav>
-)
 
 const Version = () => <>v{__VERSION__} · <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">Source</a></>
 
@@ -273,22 +259,28 @@ function Notifications() {
   )
 }
 
-/** True when the newest notification is newer than the last visit to /notifications. */
+/** Dots for the nav: a notification newer than the last visit to /notifications, and unread messages. */
 function useUnread() {
-  const [unread, setUnread] = useState(false)
+  const [unread, setUnread] = useState({ notifications: false, messages: false })
   useEffect(() => {
     if (!account?.done) return
-    const check = () =>
+    const set = (k: keyof typeof unread, v: boolean) => setUnread((u) => ({ ...u, [k]: v }))
+    const messages = () =>
+      account?.dm && dm('inbox', { query: { limit: 20 } }).then((r) => set('messages', r.result.hasUnreadRequests || r.result.conversations.some((c: any) => c.viewerContext.unreadCount > 0)), () => {})
+    const check = () => {
       get('/v2/farcaster/notifications', { fid: account!.fid, limit: 1 }).then((r) => {
         const t = r.notifications[0] && Date.parse(r.notifications[0].timestamp)
-        setUnread(!!t && t > Number(localStorage.getItem(seenKey()) || 0))
+        set('notifications', !!t && t > Number(localStorage.getItem(seenKey()) || 0))
       }, () => {})
+      messages()
+    }
     check()
     const i = setInterval(check, 60000)
-    const seen = () => setUnread(false)
+    const seen = () => set('notifications', false)
     addEventListener('seen', seen)
-    return () => (clearInterval(i), removeEventListener('seen', seen))
-  }, [account?.fid])
+    addEventListener('dms', messages)
+    return () => (clearInterval(i), removeEventListener('seen', seen), removeEventListener('dms', messages))
+  }, [account?.fid, account?.dm])
   return unread
 }
 
@@ -413,7 +405,13 @@ function Profile({ id }: { id: string }) {
           <section class="profile">
             <div class="row-top">
               <Avatar u={u} size={72} link={false} />
-              {self ? <a class="btn ghost small" href="/settings">Edit profile</a> : <button class={`btn small${following ? ' ghost' : ''}`} onClick={toggle} disabled={following === null && !!account?.done}>{following ? 'Following' : 'Follow'}</button>}
+              {self ? <a class="btn ghost small" href="/settings">Edit profile</a> : (
+                <span class="btns">
+                  {/* a 1:1 conversation's id is both FIDs, sorted (as strings, like farcaster.xyz does) */}
+                  {account?.done && <a class="btn ghost small" href={`/messages/${[account.fid, u.fid].sort().join('-')}`}>Message</a>}
+                  <button class={`btn small${following ? ' ghost' : ''}`} onClick={toggle} disabled={following === null && !!account?.done}>{following ? 'Following' : 'Follow'}</button>
+                </span>
+              )}
             </div>
             <h2>{nameOf(u)}</h2>
             <div class="handle">@{handle(u)} <span class="pill">fid {u.fid}</span></div>
@@ -587,6 +585,7 @@ function Settings() {
               </>
             )}
             <div class="setting"><span>{account.wallet ? 'Signing key as a file' : 'All keys as a file'}</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
+            {account.dm && <div class="setting"><span>Key to your messages on farcaster.xyz</span><button class="btn ghost small" onClick={() => setAccount({ ...account!, dm: undefined })}>Forget</button></div>}
             <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" disabled={out === 'busy'} onClick={signOut}>{out === 'busy' ? 'Signing out…' : out === 'stuck' ? 'Sign out anyway' : out ? 'Erase keys?' : 'Sign out'}</button></div>
             {out && <p class="hint">{account.wallet ? 'This removes the account and its signing key from this browser. Your wallet is not affected.' : "This erases the recovery phrase from this browser. Export your keys first if it's your only copy."}</p>}
           </section>
@@ -658,13 +657,14 @@ function App() {
       : r0 === 'u' ? <Profile id={decode(r1)} />
         : r0 === 'search' ? <Search />
           : r0 === 'notifications' ? <Notifications />
+          : r0 === 'messages' ? <Messages id={r1 && decode(r1)} />
           : r0 === 'settings' ? <Settings />
             : r0 === 'join' ? <><Header /><Join step={r1} /></>
               : <Home />
-  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell] as [string, string, string]] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
+  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell], ['messages', 'Messages', P.mail]] as [string, string, string][] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
   const href = (k: string) => (k === 'u' ? userPath(me!) : `/${k}`)
   const active = (k: string) => (k === 'u' ? r0 === 'u' && !!me && userPath(me) === `/u/${r1}` : r0 === k)
-  const ico = (k: string, d: string) => <span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span>
+  const ico = (k: string, d: string) => <span class="ico"><Icon d={d} size={22} />{unread[k as keyof typeof unread] && <i class="badge" />}</span>
   return (
     <div class="app">
       <nav class="side" aria-label="Main">
@@ -685,7 +685,7 @@ function App() {
       <nav class="tabbar" aria-label="Main">
         {nav.map(([k, label, d]) => <a class={active(k) ? 'on' : ''} href={href(k)} aria-label={label}>{ico(k, d)}</a>)}
       </nav>
-      {me && r0 !== 'join' && r0 !== 'settings' && <button class="fab" aria-label="New cast" onClick={() => setCompose({})}><Icon d={P.pen} size={22} /></button>}
+      {me && !['join', 'settings', 'messages'].includes(r0) && <button class="fab" aria-label="New cast" onClick={() => setCompose({})}><Icon d={P.pen} size={22} /></button>}
       {compose && <Composer {...compose} onClose={() => setCompose(null)} />}
       {viewer && <Lightbox {...viewer} close={() => setViewer(null)} />}
       <Toast />

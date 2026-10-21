@@ -2,7 +2,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { HDKey } from '@scure/bip32'
-import { account, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
+import { account, dm, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
 import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, keyCustody, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
 
 const keys = new Map<string, Promise<Uint8Array>>()
@@ -206,6 +206,30 @@ export async function stripVideoMeta(file: Blob): Promise<Blob> {
   }
   parts.push(file.slice(pos))
   return new Blob(parts, { type: file.type })
+}
+
+/** Ask farcaster.xyz for a token that reads and sends this account's direct casts (and does nothing else),
+ *  signed by the custody address. The wording is farcaster.xyz's own, as Comm signs it. */
+export async function connectMessages() {
+  const a = account!
+  const { result } = await dm('nonce')
+  const message = `This signature grants access to read and write your Farcaster Direct Casts.
+
+In most cases, this message should get signed invisibly, without your interaction.
+
+If you are seeing this text from a signing prompt in your wallet, tread very carefully.
+
+Direct cast authorization for Farcaster FID ${a.fid}
+
+URI: https://client.farcaster.xyz/v2/get-dc-auth-token
+Version: 1
+Chain ID: 1
+Nonce: ${result.nonce}
+Issued At: ${new Date().toISOString()}`
+  const signature = '0x' + hex(await (await custodyOf(a)).message(new TextEncoder().encode(message)))
+  const t = await dm('token', { method: 'POST', body: { message, signature } })
+  if (!t.result?.token) throw new Error("farcaster.xyz didn't open your messages.")
+  setAccount({ ...account!, dm: t.result.token })
 }
 
 export const deleteCast = (hash: string) => send(MT.CAST_REMOVE, castRemoveBody(hash))

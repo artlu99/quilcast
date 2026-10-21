@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { account, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
+import { account, back, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
 import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from './shared.ts'
 
 // keys and crypto load only when someone signs in or writes
@@ -34,6 +34,7 @@ export const P = {
   play: 'M7 4v16l13-8z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0',
+  mail: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6',
   plus: 'M12 5v14M5 12h14',
   check: 'M20 6 9 17l-5-5',
 }
@@ -49,8 +50,8 @@ export const Logo = ({ size = 28 }: { size?: number }) => (
   </svg>
 )
 
-export const ago = (t: string) => {
-  const s = (Date.now() - Date.parse(t)) / 1000
+export const ago = (t: string | number) => {
+  const s = (Date.now() - new Date(t).getTime()) / 1000
   if (s < 60) return 'now'
   if (s < 3600) return `${Math.floor(s / 60)}m`
   if (s < 86400) return `${Math.floor(s / 3600)}h`
@@ -65,6 +66,23 @@ export const userPath = (u: User) => `/u/${uname(u) || u.fid}`
 export const channelOf = (u?: string | null) => u?.match(/(?:warpcast\.com|farcaster\.xyz)\/~\/channel\/([^/?#]+)/)?.[1]
 export const channelUrl = (id: string) => `https://warpcast.com/~/channel/${id}`
 export const stop = (e: Event) => e.stopPropagation()
+
+export const Header = ({ title, back: showBack = true, children }: { title?: ComponentChildren; back?: boolean; children?: ComponentChildren }) => (
+  <div class="phead">
+    <div class="phead-row">
+      {showBack ? <button class="icon-btn" aria-label="Back" onClick={back}><Icon d={P.back} /></button> : <a class="brand only-mobile" href="/" aria-label="Quilcast home"><Logo size={26} /></a>}
+      <h1>{title}</h1>
+    </div>
+    {children}
+  </div>
+)
+
+export const Tabs = <T extends string>({ tabs, value, set }: { tabs: [T, string][]; value: T; set: (t: T) => void }) => (
+  <nav class="tabs" role="tablist">
+    {/* a list under tabs in the sticky header starts at its top, not wherever the previous one was scrolled to */}
+    {tabs.map(([k, label]) => <button role="tab" aria-selected={value === k} class={value === k ? 'on' : ''} onClick={(e) => (e.currentTarget.closest('.phead') && scrollTo(0, 0), set(k))}>{label}</button>)}
+  </nav>
+)
 
 /** Someone else's image: lazy, sent without a referrer, and hidden rather than broken when it fails. */
 export const Img = (p: { src?: string; class?: string }) => (

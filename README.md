@@ -12,6 +12,7 @@ Live at **[quilcast.com](https://quilcast.com)**.
 - Several accounts per browser, switched from the account menu (bottom left) or Settings
 - Rich link previews (Open Graph and Farcaster mini app images) through `/api/unfurl`, and @mention autocomplete in the composer
 - Search for people and for cast text
+- Messages: farcaster.xyz direct casts, with an inbox, requests, one-to-one and group chats, and a Message button on profiles. Direct casts aren't part of the Farcaster protocol, so the custody key signs farcaster.xyz's authorization once and Quilcast keeps a token that opens direct casts and nothing else. farcaster.xyz only answers its own site, so the server relays these calls without storing them. As on farcaster.xyz, they aren't end-to-end encrypted
 - Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel. A new cast shows as "Posting…" until the network has indexed it
 - Attach up to two photos or videos per cast. Photos are re-encoded in the browser (≤2048 px JPEG, no EXIF). Uploads go through `/api/upload` to Farcaster's CDN the way Quorum does it, using a 10-minute farcaster.xyz token the browser signs with your custody key. Farcaster only gives upload URLs to accounts that have a Warpcast signer, so other accounts' files are stored on the server and served from `/m/<hash>`
 - HLS video plays natively where the browser supports it and through hls.js (loaded on first play) in Firefox-based browsers
@@ -36,6 +37,7 @@ Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
 | `server/index.mjs` | Serves `dist/` (brotli or gzip), fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
 | `server/upload.mjs` | `/api/upload`: Farcaster CDN relay with a local fallback |
+| `src/messages.tsx`, `server/dm.mjs` | Messages, and the relay that carries them to farcaster.xyz's direct-cast endpoints (and nowhere else) |
 | `server/unfurl.mjs` | `/api/unfurl`: Open Graph metadata for link previews, public hosts only |
 
 The message encoders are checked byte for byte against `@farcaster/core`, `viem` and Quilibrium's `quorum-shared`.
@@ -57,6 +59,7 @@ Your recovery phrase is stored unencrypted in this browser's `localStorage`. Any
 - Keys never leave the browser. Pages are served with a strict CSP (`script-src 'self'`, no inline styles, no framing) and `Referrer-Policy: no-referrer`.
 - Links in casts and previews are untrusted, because the network only checks their length. Only public http(s) URLs get rendered.
 - The server's own fetches (link previews, card images, video posters) only reach public hosts on ports 80 and 443. Every address is checked at connect time and again on each redirect, and size, time and pixel limits apply.
+- Messages use a token farcaster.xyz scopes to direct casts. The relay passes it to a fixed list of direct-cast endpoints and never stores or logs it, or the messages.
 - Signers get only the permissions Quilcast uses (casts, reactions, follows, profile), and they revoke themselves on sign-out.
 - Before upload, photos are re-encoded and MP4/MOV metadata (location, device) is wiped. Uploads stored on the server are checked against their claimed type and served inert (`sandbox` CSP). Each signed upload request works only once.
 

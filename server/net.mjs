@@ -129,3 +129,6 @@ export function gate(n, wait = 30) {
 
 /** Put `v` (a value or a promise) in a cache of at most `max` entries, oldest out first; a rejected promise drops out, so it's retried. */
 export const keep = (map, max, k, v) => (map.size >= max && map.delete(map.keys().next().value), map.set(k, v), Promise.resolve(v).catch(() => map.delete(k)), v)
+
+/** An error that carries the HTTP status to answer with. */
+export const fail = (status, message) => Object.assign(new Error(message), { status })

@@ -18,9 +18,17 @@ const internal = createServer((q, r) => (internalHits++, r.end('secret')))
 const internalPort = await listen(internal)
 const evil = '$& $\' $` "><script>alert(1)</script>'
 const key = secp256k1.utils.randomSecretKey()
-const node = createServer((q, r) => {
+const node = createServer(async (q, r) => {
   const u = new URL(q.url, 'http://x')
   r.setHeader('content-type', 'application/json')
+  // farcaster.xyz's direct casts: echo what arrived, so the relay test can check it
+  if (u.pathname === '/v2/get-dc-nonce') return r.end(JSON.stringify({ result: { nonce: 'n1' } }))
+  if (u.pathname === '/v2/get-dc-auth-token') return r.end(JSON.stringify({ result: { token: u.searchParams.get('message') === 'hi' && u.searchParams.get('signature')?.length === 132 ? 'fc_dc_test' : null } }))
+  if (u.pathname.startsWith('/v2/direct-cast-') || u.pathname.startsWith('/fc/')) {
+    let body = ''
+    for await (const c of q) body += c
+    return r.end(JSON.stringify({ path: u.pathname, method: q.method, auth: q.headers.authorization, query: u.search, idempotency: q.headers['idempotency-key'], body: body && JSON.parse(body) }))
+  }
   if (u.pathname === '/v2/farcaster/cast')
     return r.end(JSON.stringify({ cast: { hash: u.searchParams.get('identifier'), text: evil, timestamp: '2026-01-01T00:00:00Z', embeds: [{ url: `http://127.0.0.1:${internalPort}/a.png` }], author: { fid: 1, username: 'x', display_name: evil, pfp_url: `http://127.0.0.1:${internalPort}/pfp.png` }, reactions: { likes_count: 0, recasts_count: 0 }, replies: { count: 0 } } }))
   if (u.pathname.startsWith('/v2/farcaster/user')) return r.end(JSON.stringify({ user: { fid: 1, username: 'x', display_name: 'X', custody_address: address(key), profile: { bio: { text: evil } } } }))
@@ -133,4 +141,23 @@ test('an upload signature works once, also when re-encoded, and the file lands o
   for (let i = 0; i < 50 && st.state === 'sending'; i++) await new Promise((r) => setTimeout(r, 100)), (st = await (await fetch(`${base}/api/upload/${id}`)).json())
   assert.equal(st.state, 'ready')
   assert.match(st.url, /^https:\/\/quilcast\.test\/m\/[0-9a-f]{24}\.png$/)
+})
+
+test('the DM relay carries the token to the direct-cast endpoints and nowhere else', async () => {
+  const call = (op, init) => fetch(`${base}/api/dm/${op}`, init)
+  assert.equal((await (await call('nonce')).json()).result.nonce, 'n1')
+  // the signed message is exchanged from a POST body, never a URL
+  const token = (body) => call('token', { method: 'POST', body: JSON.stringify(body) })
+  assert.equal((await (await token({ message: 'hi', signature: '0x' + 'ab'.repeat(65) })).json()).result.token, 'fc_dc_test')
+  assert.equal((await token({ message: 'hi', signature: 'nope' })).status, 400)
+  assert.equal((await call('token?message=hi')).status, 405)
+  const auth = { authorization: 'Bearer fc_dc_test_token' }
+  const inbox = await (await call('inbox?category=request&limit=5&fid=1', { headers: auth })).json()
+  assert.deepEqual([inbox.path, inbox.auth, inbox.query], ['/v2/direct-cast-inbox', 'Bearer fc_dc_test_token', '?category=request&limit=5'])
+  assert.equal((await call('inbox')).status, 401)
+  for (const op of ['me', 'auth', '__proto__', 'constructor']) assert.equal((await call(op, { headers: auth })).status, 404, op)
+  assert.equal((await call('send', { headers: auth })).status, 405)
+  const sent = await (await call('send', { method: 'PUT', headers: auth, body: JSON.stringify({ message: 'yo' }) })).json()
+  assert.deepEqual([sent.path, sent.method, sent.body], ['/fc/message', 'PUT', { message: 'yo' }])
+  assert.ok(sent.idempotency)
 })

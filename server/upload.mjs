@@ -12,10 +12,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, statfs, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fetchJson, gate, imageInfo } from './net.mjs'
+import { fail, fetchJson, gate, imageInfo } from './net.mjs'
 
-const FC = process.env.FC_URL || 'https://client.farcaster.xyz'
-const FC_HEADERS = { origin: 'https://farcaster.xyz', referer: 'https://farcaster.xyz/', accept: 'application/json' }
+export const FC = process.env.FC_URL || 'https://client.farcaster.xyz'
+// farcaster.xyz's API answers its own site only
+export const FC_HEADERS = { origin: 'https://farcaster.xyz', referer: 'https://farcaster.xyz/', accept: 'application/json' }
 export const MEDIA = process.env.MEDIA_DIR || '/data/media'
 const TMP = join(MEDIA, '..', 'incoming')
 export const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' }
@@ -47,7 +48,6 @@ export function looksLike(type, b) {
 }
 
 const canon = (o) => (o === null || typeof o !== 'object' ? JSON.stringify(o) : Array.isArray(o) ? `[${o.map(canon).join(',')}]` : `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(',')}}`)
-const fail = (status, message) => Object.assign(new Error(message), { status })
 
 /** Address that signed the farcaster.xyz bearer (EIP-191 over the canonical auth request). */
 function signerOf(authRequest, bearer) {
