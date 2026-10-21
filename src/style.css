@@ -185,7 +185,7 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .lc-site { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-site img { width: 14px; height: 14px; border-radius: 3px; flex: none; }
 /* clamped text; each sets its own line count */
-.clamp, .lc-title, .lc-desc, .tw-text, .tw-quote p, .note-cast, .ctx p { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.clamp, .fold, .lc-title, .lc-desc, .tw-text, .tw-quote p, .note-cast, .ctx p { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 .lc-title { font-weight: 600; -webkit-line-clamp: 2; }
 .lc-desc { color: var(--muted); -webkit-line-clamp: 2; }
 .lc-btn { margin: 0 12px 10px; padding: 7px; border-radius: 10px; background: var(--soft); text-align: center; font-weight: 600; font-size: 14px; }
@@ -207,6 +207,9 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .qbody { display: flex; gap: 10px; }
 .qbody .text { flex: 1; min-width: 0; }
 .clamp { -webkit-line-clamp: 4; }
+.fold { -webkit-line-clamp: 10; }
+.show-more { border: 0; background: none; padding: 2px 0; color: var(--accent); font-size: 15px; }
+.show-more:hover { text-decoration: underline; }
 .qimg { width: 76px; height: 76px; object-fit: cover; border-radius: 10px; margin-top: 4px; flex: none; }
 .qbody.bare { display: block; }
 .bare .qimg { display: block; width: auto; height: auto; max-width: 100%; max-height: 300px; margin-top: 8px; }

@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact'
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, back, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
 import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from './shared.ts'
 import type { AppMeta } from './miniapp.tsx'
@@ -142,6 +142,23 @@ export function RichText({ text, class: cls = 'text' }: { text: string; class?: 
         return u ? <a href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{shortUrl(p)}</a> : p
       })}
     </p>
+  )
+}
+
+// long text in feeds folds at 10 lines; the button shows only when something is cut
+function Folded({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const [over, setOver] = useState(false)
+  useLayoutEffect(() => {
+    const p = ref.current?.firstElementChild
+    p && setOver(p.scrollHeight > p.clientHeight + 1)
+  }, [text])
+  return (
+    <div ref={ref}>
+      <RichText text={text} class={open ? 'text' : 'text fold'} />
+      {over && !open && <button class="show-more" onClick={(e) => (stop(e), setOpen(true))}>Show more</button>}
+    </div>
   )
 }
 
@@ -401,7 +418,7 @@ export function CastCard({ c, focus, line, inThread, quotes = 0 }: { c: Cast; fo
           {ch && <span class="chan">/{ch}</span>}
         </header>
         {c.parent_hash && !inThread && <div class="replying">Replying to {parentUser ? <a href={userPath(parentUser)} onClick={stop}>@{handle(parentUser)}</a> : 'a cast'}</div>}
-        <RichText text={castText(c)} />
+        <Folded text={castText(c)} />
         <Embeds c={c} />
         {actions}
       </div>
