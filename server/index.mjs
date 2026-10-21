@@ -67,6 +67,28 @@ setInterval(() => {
   for (const [k, h] of hits) h.reset < now && hits.delete(k)
 }, 60e3).unref()
 
+// --- mini app directory ---
+
+// farcaster.xyz's public top mini apps (its CORS doesn't allow us), trimmed to what the Discover list shows.
+// Kept ten minutes; if farcaster.xyz fails, the last good list stays.
+let directory = { at: 0, apps: null }
+const https_ = (u) => (typeof u === 'string' && /^https:\/\//.test(u) && u.length < 1024 ? u : undefined)
+const text = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined)
+async function apps() {
+  if (directory.apps && directory.at > Date.now() - 600e3) return directory.apps
+  const r = await fetchJson('https://api.farcaster.xyz/v1/top-frameapps?limit=100', 8000).catch(() => null)
+  const list = (r?.result?.frames || []).flatMap((f) => {
+    const url = https_(f.homeUrl)
+    return url ? [{
+      url, name: text(f.name, 60) || new URL(url).host, tagline: text(f.tagline || f.subtitle || f.description, 140), icon: https_(f.iconUrl),
+      splash: https_(f.splashImageUrl), bg: /^#[0-9a-f]{3,8}$/i.test(f.splashBackgroundColor) ? f.splashBackgroundColor : undefined,
+      category: typeof f.primaryCategory === 'string' && /^[a-z-]{1,30}$/.test(f.primaryCategory) ? f.primaryCategory : undefined,
+    }] : []
+  })
+  if (list.length) directory = { at: Date.now(), apps: list }
+  return directory.apps || []
+}
+
 const renders = gate(2)
 const previews = gate(16)
 
@@ -265,6 +287,11 @@ createServer(async (req, res) => {
       const err = r instanceof Error
       if (err && !r.status) console.error('upload', r)
       return json(err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Upload failed' } : r)
+    }
+
+    if (path === '/api/apps') {
+      if (limited(`apps:${ip}`, 60)) return json(429, [])
+      return json(200, await apps(), 'public, max-age=600')
     }
 
     if (path === '/api/notify' || path.startsWith('/api/notify/') || path === '/api/manifest') {

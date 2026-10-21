@@ -448,12 +448,17 @@ small.warn { color: var(--warn); }
 .wallet-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--line); background: none; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .menu .wname { flex: 1; }
 .wallet-icon { width: 18px; height: 18px; border-radius: 4px; flex: none; }
-.dock { position: fixed; z-index: 9; right: 16px; bottom: 16px; display: flex; gap: 6px; padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 99px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); }
+.dock { position: fixed; z-index: 9; right: 16px; bottom: 16px; display: flex; gap: 6px; padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); }
 .dock button { padding: 2px; border: 2px solid transparent; border-radius: 12px; background: none; display: grid; }
 .dock button.on { border-color: var(--accent); }
 .dock .app-icon { width: 34px; height: 34px; font-size: 14px; border-radius: 9px; }
 .app-open { display: flex; gap: 8px; }
 .app-row .icon-btn.on { color: var(--accent); }
+.apps-h { margin-top: 6px; }
+.settings .searchbox { margin: 0; }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+.chips .chip { flex: none; }
+.app-row.listed { width: 100%; color: var(--ink); padding: 8px 10px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); }
 .ask-card .field { margin: 0; }

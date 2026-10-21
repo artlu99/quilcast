@@ -98,6 +98,12 @@ export const Img = (p: { src?: string; class?: string }) => (
   <img alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => (e.currentTarget.style.display = 'none')} {...p} />
 )
 
+/** A mini app's icon, or the first letter of its name when there's none or it won't load. */
+export function AppIcon({ src, name }: { src?: string; name?: string }) {
+  const [bad, setBad] = useState(false)
+  return src && !bad ? <img class="app-icon" alt="" loading="lazy" referrerpolicy="no-referrer" src={src} onError={() => setBad(true)} /> : <span class="app-icon">{[...(name || '?')][0]}</span>
+}
+
 /** A popup that closes on any click outside it. */
 export function Menu({ close, class: cls, children }: { close: () => void; class?: string; children: ComponentChildren }) {
   const ref = useRef<HTMLDivElement>(null)

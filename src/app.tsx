@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { castText, n } from './shared.ts'
-import { ago, Avatar, CastCard, fetchCast, handle, Header, Icon, Img, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
 import type { AppMeta } from './miniapp.tsx'
 import './style.css'
 
@@ -237,7 +237,7 @@ function AppNotes() {
     <>
       {list.map((n) => (
         <button class="note-row app-note" onClick={() => openNote(n)}>
-          {n.icon ? <Img class="app-icon" src={n.icon} /> : <span class="app-icon">{[...n.name][0]}</span>}
+          <AppIcon src={n.icon} name={n.name} />
           <span class="note-body">
             <span><b>{n.name}</b> <span class="muted">· {ago(n.at)}</span></span>
             <b>{n.title}</b>
@@ -488,7 +488,45 @@ function Search() {
   )
 }
 
-/** Mini apps added from inside them (addMiniApp), their notifications, and a box to open any by its link. */
+type Listed = AppMeta & { tagline?: string; category?: string }
+// farcaster.xyz's top mini apps, through our server (cached there); loaded once per visit
+let listed: Promise<Listed[]> | undefined
+const loadListed = () => (listed ||= fetch('/api/apps').then((r) => r.json(), () => []).then((l) => (Array.isArray(l) && l.length ? l : ((listed = undefined), []))))
+const CATEGORY = (c: string) => c.replace(/-/g, ' & ').replace(/^./, (x) => x.toUpperCase())
+
+/** The directory: categories, a search over names and taglines, and a row per app that opens it. */
+function Discover() {
+  const [list, setList] = useState<Listed[] | null>(null)
+  const [cat, setCat] = useState('')
+  const [q, setQ] = useState('')
+  useEffect(() => void loadListed().then(setList), [])
+  if (!list) return <div class="spinner" />
+  if (!list.length) return <p class="hint">The directory couldn't be loaded. Try again in a bit.</p>
+  const cats = [...new Set(list.flatMap((a) => a.category ?? []))]
+  const term = q.trim().toLowerCase()
+  const shown = list.filter((a) => (!cat || a.category === cat) && (!term || `${a.name} ${a.tagline || ''}`.toLowerCase().includes(term)))
+  return (
+    <>
+      <div class="searchbox">
+        <Icon d={P.search} size={16} />
+        <input type="search" value={q} onInput={(e) => setQ(e.currentTarget.value)} placeholder="Search mini apps" aria-label="Search mini apps" />
+      </div>
+      <div class="chips">
+        {['', ...cats].map((c) => <button class={`chip${cat === c ? ' on' : ''}`} aria-pressed={cat === c} onClick={() => setCat(c)}>{c ? CATEGORY(c) : 'All'}</button>)}
+      </div>
+      {shown.map((a) => (
+        <button class="app-row app-main listed" onClick={() => launchApp(a)}>
+          <AppIcon src={a.icon} name={a.name} />
+          <span><b>{a.name}</b><small>{a.tagline || new URL(a.url).host}</small></span>
+        </button>
+      ))}
+      {!shown.length && <p class="hint">Nothing matches.</p>}
+      <p class="hint">The top mini apps on Farcaster, as farcaster.xyz ranks them. Quilcast doesn't review them, so treat them like any website.</p>
+    </>
+  )
+}
+
+/** Mini apps added from inside them (addMiniApp), their notifications, the directory, and a box to open any by its link. */
 function Apps() {
   const [list, setList] = useState(() => read<AppMeta[]>('quilcast:apps', []))
   const [url, setUrl] = useState('')
@@ -552,11 +590,11 @@ function Apps() {
           <input value={url} onInput={(e) => setUrl(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && openTyped()} placeholder="Paste a mini app link" aria-label="Mini app link" inputMode="url" />
           <button class="btn small" onClick={openTyped} disabled={!url.trim()}>Open</button>
         </div>
-        {!list.length && <p class="hint">Mini apps open from casts. The ones you add show up here.</p>}
+        {list.length > 0 && <h2 class="apps-h">Your apps</h2>}
         {list.map((a) => (
           <div class="app-row">
             <button class="app-main" onClick={() => launchApp(a)}>
-              {a.icon ? <Img class="app-icon" src={a.icon} /> : <span class="app-icon">{[...(a.name || '?')][0]}</span>}
+              <AppIcon src={a.icon} name={a.name} />
               <span><b>{a.name}</b><small>{busy === a.url ? 'Working…' : new URL(a.url).host}</small></span>
             </button>
             {account?.done && <button class={`icon-btn${on(a) ? ' on' : ''}`} disabled={!!busy} aria-pressed={on(a)} aria-label={`Notifications from ${a.name}`} title={on(a) ? 'Notifications on' : 'Notifications off'} onClick={() => bell(a)}><Icon d={P.bell} fill={on(a)} /></button>}
@@ -564,6 +602,8 @@ function Apps() {
           </div>
         ))}
         {busy && busy !== 'push' && !list.some((x) => x.url === busy) && <p class="hint">{busy}</p>}
+        <h2 class="apps-h">Discover</h2>
+        <Discover />
         {account?.done && (
           <section>
             <div class="setting"><span>Push notifications on this device</span><button class="btn ghost small" disabled={busy === 'push'} onClick={togglePush}>{push ? 'Turn off' : 'Turn on'}</button></div>
