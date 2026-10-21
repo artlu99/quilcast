@@ -93,12 +93,13 @@ async function fetchPage(box: Box, older: boolean) {
   if (box === 'default') store.requestsCount = r.result.requestsCount || 0
   changed()
 }
-/** Older pages until one brings something `want` keeps, or the list ends: a click always shows something or the end. */
-export async function loadOlder(box: Box, want: (c: Convo) => boolean) {
+/** Older pages until one brings something `want` keeps, or the list ends, so a click always shows something or the end.
+ *  `still` lets the page stop it (it was left, or the tab changed). */
+export async function loadOlder(box: Box, want: (c: Convo) => boolean, still = () => true) {
   const list = store.lists[box]
   const count = () => (list.items || []).filter(want).length
   const before = count()
-  for (let i = 0; i < 10 && list.more && count() === before; i++) await load(box, true)
+  while (list.more && count() === before && still()) await load(box, true)
 }
 
 /** A conversation's latest messages (20 when some are already here, which is all a refresh needs), or earlier ones. */
@@ -170,6 +171,36 @@ export const mute = (c: Convo, muted: boolean) => setting(c, 'muted', muted, 'mu
 /** Auto-delete messages after `days` (1, 7, 30 or 365), or never ('Infinity'). */
 export const autoDelete = (c: Convo, days: number | 'Infinity') => setting(c, 'messageTTLDays', days, 'ttl', { ttl: days })
 
+// one conversation fresh from farcaster.xyz, merged into the copy everyone holds and filed in the right list;
+// what arrives in quick succession for the same conversation waits for one request
+const soon = new Set<string>()
+function refresh(id: string) {
+  if (soon.has(id)) return
+  soon.add(id)
+  setTimeout(() => {
+    soon.delete(id)
+    dm('conversation', { query: { conversationId: id } }).then((r) => file(r.result.conversation), () => {})
+  }, 1500)
+}
+function file(d: Convo) {
+  const c = store.convos.get(d.conversationId)
+  if (c) {
+    Object.assign(c.viewerContext, d.viewerContext)
+    c.lastMessage = d.lastMessage || c.lastMessage
+    c.name = d.name ?? c.name
+    c.photoUrl = d.photoUrl ?? c.photoUrl
+    c.participants ||= d.participants
+  } else store.convos.set(d.conversationId, d)
+  const conv = store.convos.get(d.conversationId)!
+  for (const box of ['default', 'request'] as const) {
+    const list = store.lists[box]
+    const here = !!list.items?.includes(conv)
+    const belongs = (conv.viewerContext.category || 'default') === box
+    if (list.items && here !== belongs) list.items = belongs ? [conv, ...list.items] : list.items.filter((x) => x !== conv)
+  }
+  changed()
+}
+
 // newest conversation on top of the inbox (requests keep their place)
 function bump(c: Convo, m: Msg) {
   c.lastMessage = m
@@ -224,8 +255,8 @@ export function handle({ messageType, payload }: Event) {
       const temp = mine && chat.msgs.find((x) => x.state === 'sending' && x.message === m.message)
       chat.msgs = temp ? chat.msgs.map((x) => (x === temp ? m : x)) : merge(chat.msgs, [m])
     }
-    // a conversation we haven't seen (a new one, or a request) comes with its list
-    if (!c) return void load('default').then(() => store.lists.request.items && load('request')).catch(() => {})
+    // a conversation we haven't seen yet (a new one, a request, or one further down) is looked up alone
+    if (!c) return refresh(id)
     bump(c, m)
     if (!mine) {
       // on screen it's read as it arrives; otherwise it counts
@@ -236,7 +267,7 @@ export function handle({ messageType, payload }: Event) {
   } else if (messageType === 'direct-cast-read' && c) {
     c.viewerContext.unreadCount = 0
     changed()
-  } else if (messageType === 'refresh-self-direct-casts-inbox') load('default').catch(() => {})
+  } else if (messageType === 'refresh-self-direct-casts-inbox') refresh(id)
 }
 
 let ws: WebSocket | undefined

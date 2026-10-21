@@ -89,15 +89,21 @@ function Inbox() {
   const [tab, setTab] = useState<Tab>('inbox')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [olderErr, setOlderErr] = useState('')
   const box: Box = tab === 'requests' ? 'request' : 'default'
   const list = store.lists[box]
   useEffect(() => void (list.items || load(box).catch((e) => setErr(e.message))), [box])
+  // a scan in progress stops when the tab changes or the page is left
+  const live = useRef(tab)
+  useEffect(() => ((live.current = tab), () => void (live.current = '' as Tab)), [tab])
   const shown = list.items?.filter(MATCH[tab])
   const unreadN = store.lists.default.items?.filter(MATCH.unread).length
   // older pages until this tab gets something new, or the list ends (then the button goes)
   const older = async () => {
+    const mine = tab
     setBusy(true)
-    await loadOlder(box, MATCH[tab]).catch((e) => toast(e.message))
+    setOlderErr('')
+    await loadOlder(box, MATCH[tab], () => live.current === mine).catch((e) => setOlderErr(e.message))
     setBusy(false)
   }
   return (
@@ -109,7 +115,8 @@ function Inbox() {
       {!shown && !err && <div class="spinner" />}
       {shown?.length === 0 && <div class="note">{EMPTY[tab]}</div>}
       {shown?.map((c) => <Row key={c.conversationId} c={c} />)}
-      {shown && list.more && <button class="link-btn more" disabled={busy} onClick={older}>{busy ? 'Loading…' : tab === 'requests' ? 'Older requests' : 'Older conversations'}</button>}
+      {shown && list.more && <button class="link-btn more" disabled={busy} onClick={older}>{busy ? `Loading… ${list.items?.length} checked` : tab === 'requests' ? 'Older requests' : 'Older conversations'}</button>}
+      {olderErr && <div class="note">Couldn't load older conversations: {olderErr}</div>}
     </>
   )
 }
