@@ -289,6 +289,7 @@ a.searchbox { margin: 0; }
 .msg-state { color: var(--muted); }
 .dm-img { padding: 0; border: 0; background: none; border-radius: 16px; overflow: hidden; cursor: zoom-in; }
 .dm-img img { display: block; max-width: 100%; max-height: 320px; }
+.dm-img + .dm-img, .dm-img + .bubble { margin-top: 3px; }
 .msg-who { font-size: 12px; color: var(--muted); margin: 8px 0 2px 12px; }
 .msg-note { align-self: center; color: var(--muted); font-size: 12px; margin: 12px 0 4px; }
 .msg small { margin: 2px 6px 0; }

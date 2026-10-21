@@ -11,10 +11,12 @@ const who = (p?: Person) => (p?.fid && p.fid === account!.fid ? 'You' : p?.usern
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 const MUTED = `${P.bell}M3 3l18 18`
 const TTL: [number | 'Infinity', string][] = [['Infinity', 'Never'], [1, 'After a day'], [7, 'After a week'], [30, 'After 30 days'], [365, 'After a year']]
-// a message that is just an image link shows the image
-const picOf = (m: Msg) => {
-  const u = m.message.trim()
-  return !m.isDeleted && !/\s/.test(u) && isImg(u) ? safeUrl(u) : undefined
+// image links in a message show as images; the rest stays text
+const partsOf = (m: Msg) => {
+  const pics: string[] = []
+  if (m.isDeleted) return { pics, text: m.message }
+  const text = m.message.replace(/\S+/g, (t) => (isImg(t) && safeUrl(t) ? (pics.push(safeUrl(t)!), '') : t)).replace(/ {2,}/g, ' ').trim()
+  return { pics, text }
 }
 
 /** Group events carry numbers (FIDs, days) in `message`; say what happened instead. */
@@ -32,7 +34,7 @@ function describe(m: Msg) {
   }
 }
 const preview = (m: Msg, group: boolean) =>
-  m.type !== 'text' ? describe(m) : m.isDeleted ? 'Message deleted' : (m.senderFid === account!.fid ? 'You: ' : group ? `${who(m.senderContext)}: ` : '') + (picOf(m) ? 'Image' : m.message)
+  m.type !== 'text' ? describe(m) : m.isDeleted ? 'Message deleted' : (m.senderFid === account!.fid ? 'You: ' : group ? `${who(m.senderContext)}: ` : '') + (partsOf(m).text || 'Image')
 
 // the other person in a 1:1, else the group
 const face = (c: Convo) => {
@@ -145,17 +147,14 @@ function Row({ c }: { c: Convo }) {
 // in groups, others' messages carry a name on the first of a run and a face on the last
 function Bubble({ m, mine, group, name, face }: { m: Msg; mine: boolean; group: boolean; name?: Person; face?: Person }) {
   if (m.type !== 'text') return <div class="msg-note">{describe(m)}</div>
-  const pic = picOf(m)
+  const { pics, text } = partsOf(m)
   return (
     <div class={`msg${mine ? ' mine' : ''}`} title={when(m.serverTimestamp)}>
       {group && !mine && <span class="msg-face">{face && <Avatar u={person(face)} size={28} />}</span>}
       <div class="msg-col">
         {name && <span class="msg-who">{nameOf(person(name))}</span>}
-        {pic ? (
-          <button class={`dm-img ${m.state || ''}`} onClick={() => shell.view([pic], 0)}><Img src={sized(pic, 'w=600')} /></button>
-        ) : (
-          <div class={`bubble ${m.state || ''}`}>{m.isDeleted ? <i>Message deleted</i> : <RichText text={m.message} />}</div>
-        )}
+        {pics.map((u, i) => <button class={`dm-img ${m.state || ''}`} onClick={() => shell.view(pics, i)}><Img src={sized(u, 'w=600')} /></button>)}
+        {(text || !pics.length) && <div class={`bubble ${m.state || ''}`}>{m.isDeleted ? <i>Message deleted</i> : <RichText text={text} />}</div>}
         {m.state && <small class={m.state === 'failed' ? 'warn' : 'msg-state'}>{m.state === 'failed' ? 'Not sent' : 'Sending…'}</small>}
       </div>
     </div>
