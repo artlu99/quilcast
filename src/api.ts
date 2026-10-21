@@ -84,18 +84,6 @@ export async function get<T = any>(path: string, q: Record<string, string | numb
   return r.json()
 }
 
-/** farcaster.xyz direct casts, through our relay (server/dm.mjs). A 401 means the token is gone, so it's dropped and asked for again. */
-export async function dm<T = any>(op: string, o: { query?: Record<string, string | number | undefined>; method?: string; body?: unknown } = {}): Promise<T> {
-  const qs = new URLSearchParams(Object.entries(o.query || {}).filter(([, v]) => v !== undefined) as [string, string][])
-  const headers: Record<string, string> = account?.dm ? { authorization: `Bearer ${account.dm}` } : {}
-  if (o.body) headers['content-type'] = 'application/json'
-  const r = await fetch(`/api/dm/${op}?${qs}`, { method: o.method || 'GET', headers, body: o.body ? JSON.stringify(o.body) : undefined })
-  const j = await r.json().catch(() => ({}))
-  if (r.status === 401 && account?.dm) setAccount({ ...account, dm: undefined })
-  if (!r.ok) throw new Error(j.errors?.[0]?.message || j.error || `farcaster.xyz said ${r.status}`)
-  return j
-}
-
 // what the signed-in user recently liked/recast, so buttons render filled; `mineVersion` bumps when it loads
 export const mine = { likes: new Set<string>(), recasts: new Set<string>() }
 export let mineVersion = 0

@@ -67,11 +67,12 @@ export const channelOf = (u?: string | null) => u?.match(/(?:warpcast\.com|farca
 export const channelUrl = (id: string) => `https://warpcast.com/~/channel/${id}`
 export const stop = (e: Event) => e.stopPropagation()
 
-export const Header = ({ title, back: showBack = true, children }: { title?: ComponentChildren; back?: boolean; children?: ComponentChildren }) => (
+export const Header = ({ title, back: showBack = true, action, children }: { title?: ComponentChildren; back?: boolean; action?: ComponentChildren; children?: ComponentChildren }) => (
   <div class="phead">
     <div class="phead-row">
       {showBack ? <button class="icon-btn" aria-label="Back" onClick={back}><Icon d={P.back} /></button> : <a class="brand only-mobile" href="/" aria-label="Quilcast home"><Logo size={26} /></a>}
       <h1>{title}</h1>
+      {action}
     </div>
     {children}
   </div>

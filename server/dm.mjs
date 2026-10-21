@@ -1,7 +1,8 @@
 // /api/dm/<op>: farcaster.xyz direct casts. They aren't on the Farcaster network and farcaster.xyz's API
 // only answers its own site, so the browser's requests pass through here. The browser holds a token that
 // opens its direct casts and nothing else (minted from a custody-signed message, see write.ts); it rides
-// along on each request and is never kept or logged, and only these endpoints are reachable.
+// along on each request and is never kept or logged, and only these endpoints are reachable. Live updates
+// don't come through here: the browser listens on farcaster.xyz's websocket itself (dms.ts).
 import { randomUUID } from 'node:crypto'
 import { fail } from './net.mjs'
 import { FC, FC_HEADERS } from './upload.mjs'
@@ -15,6 +16,7 @@ const OPS = {
   send: ['PUT', '/fc/message'],
   read: ['POST', '/v2/direct-cast-mark-read'],
   category: ['POST', '/v2/direct-cast-conversation-categorization'],
+  mute: ['POST', '/v2/direct-cast-conversation-notifications'],
 }
 
 async function json(req) {

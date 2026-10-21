@@ -2,7 +2,8 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { HDKey } from '@scure/bip32'
-import { account, dm, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
+import { account, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
+import { dm } from './dms.ts'
 import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, keyCustody, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
 
 const keys = new Map<string, Promise<Uint8Array>>()

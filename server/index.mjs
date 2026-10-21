@@ -28,10 +28,10 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 
 // The app keeps users' keys in localStorage, so scripts may only come from this origin, and the
 // page may not be framed. Images and video come from anywhere (avatars, embeds, CDNs); the node
-// and RPC URLs are user settings, hence https: for connect-src.
+// and RPC URLs are user settings, hence https: for connect-src; messages update over farcaster.xyz's websocket.
 const CSP = [
   "default-src 'self'", "script-src 'self'", "style-src 'self'", 'img-src * data: blob:', 'media-src * data: blob:',
-  "connect-src 'self' https: http://localhost:* http://127.0.0.1:*", "worker-src 'self' blob:", "font-src 'self'", "manifest-src 'self'",
+  "connect-src 'self' https: wss://ws.farcaster.xyz http://localhost:* http://127.0.0.1:*", "worker-src 'self' blob:", "font-src 'self'", "manifest-src 'self'",
   "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src 'none'", "frame-ancestors 'none'",
 ].join('; ')
 const SECURITY = {

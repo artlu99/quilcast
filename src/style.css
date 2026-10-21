@@ -293,6 +293,9 @@ a.searchbox:hover { text-decoration: none; border-color: var(--line); }
 
 /* ---------- messages ---------- */
 .row.unread b, .row.unread .row-sub { color: var(--ink); font-weight: 700; }
+.row-top svg { flex: none; align-self: center; color: var(--muted); }
+.unread-count.quiet { background: var(--muted); }
+.more { display: block; margin: 16px auto; }
 .unread-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; flex: none; }
 .plain { color: inherit; }
 .chat { display: flex; flex-direction: column; gap: 3px; padding: 8px 16px 16px; }

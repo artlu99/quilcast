@@ -1,6 +1,6 @@
 import { render, type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { account, accounts, dm, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
+import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { castText, n } from './shared.ts'
 import { ago, Avatar, CastCard, fetchCast, handle, Header, Icon, Lightbox, Logo, Menu, nameOf, P, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
@@ -264,22 +264,22 @@ function useUnread() {
   const [unread, setUnread] = useState({ notifications: false, messages: false })
   useEffect(() => {
     if (!account?.done) return
-    const set = (k: keyof typeof unread, v: boolean) => setUnread((u) => ({ ...u, [k]: v }))
-    const messages = () =>
-      account?.dm && dm('inbox', { query: { limit: 20 } }).then((r) => set('messages', r.result.hasUnreadRequests || r.result.conversations.some((c: any) => c.viewerContext.unreadCount > 0)), () => {})
-    const check = () => {
+    // unchanged values keep the same object, so nothing re-renders
+    const set = (k: keyof typeof unread, v: boolean) => setUnread((u) => (u[k] === v ? u : { ...u, [k]: v }))
+    const check = () =>
       get('/v2/farcaster/notifications', { fid: account!.fid, limit: 1 }).then((r) => {
         const t = r.notifications[0] && Date.parse(r.notifications[0].timestamp)
         set('notifications', !!t && t > Number(localStorage.getItem(seenKey()) || 0))
       }, () => {})
-      messages()
-    }
     check()
     const i = setInterval(check, 60000)
     const seen = () => set('notifications', false)
+    // messages report their own dot, live (dms.ts)
+    const dms = (e: Event) => set('messages', !!account?.dm && (e as CustomEvent<boolean>).detail)
+    if (!account.dm) set('messages', false)
     addEventListener('seen', seen)
-    addEventListener('dms', messages)
-    return () => (clearInterval(i), removeEventListener('seen', seen), removeEventListener('dms', messages))
+    addEventListener('dms', dms)
+    return () => (clearInterval(i), removeEventListener('seen', seen), removeEventListener('dms', dms))
   }, [account?.fid, account?.dm])
   return unread
 }
@@ -585,7 +585,7 @@ function Settings() {
               </>
             )}
             <div class="setting"><span>{account.wallet ? 'Signing key as a file' : 'All keys as a file'}</span><button class="btn ghost small" onClick={exportKeys}>Export</button></div>
-            {account.dm && <div class="setting"><span>Key to your messages on farcaster.xyz</span><button class="btn ghost small" onClick={() => setAccount({ ...account!, dm: undefined })}>Forget</button></div>}
+            {account.dm && <div class="setting"><span>Key to your messages on farcaster.xyz</span><button class="btn ghost small" onClick={() => (setAccount({ ...account!, dm: undefined }), import('./dms.ts').then((m) => m.stop()))}>Forget</button></div>}
             <div class="setting"><span>Sign out{account.username ? ` of @${account.username}` : ''}</span><button class="btn danger small" disabled={out === 'busy'} onClick={signOut}>{out === 'busy' ? 'Signing out…' : out === 'stuck' ? 'Sign out anyway' : out ? 'Erase keys?' : 'Sign out'}</button></div>
             {out && <p class="hint">{account.wallet ? 'This removes the account and its signing key from this browser. Your wallet is not affected.' : "This erases the recovery phrase from this browser. Export your keys first if it's your only copy."}</p>}
           </section>
@@ -646,6 +646,8 @@ function App() {
     addEventListener('account', f)
     return () => removeEventListener('account', f)
   }, [])
+  // accounts that opened messages listen for them from the start (dms.ts loads only for them)
+  useEffect(() => void (account?.dm && import('./dms.ts').then((m) => m.start())), [account?.dm])
   useEffect(() => {
     const f = () => force((x) => x + 1)
     loadMine().then(f)

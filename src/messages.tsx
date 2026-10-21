@@ -1,28 +1,22 @@
-// Messages: farcaster.xyz's direct casts. They live on farcaster.xyz, not the Farcaster network, so they're
-// read and sent through our relay (server/dm.mjs) with a token that opens them and nothing else.
+// Messages: farcaster.xyz's direct casts, drawn from the state in dms.ts, which the websocket keeps current.
 import { Fragment } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, dm, getUser, type User } from './api.ts'
-import { ago, Avatar, Header, nameOf, RichText, Tabs, toast, userPath, w } from './ui.tsx'
-
-type Person = { fid: number; username?: string; displayName?: string; pfp?: { url?: string } }
-type Msg = { messageId: string; senderFid: number; serverTimestamp: number; type: string; message: string; isDeleted?: boolean; senderContext?: Person; state?: 'sending' | 'failed' }
-type Convo = { conversationId: string; name?: string; photoUrl?: string; isGroup: boolean; lastMessage?: Msg; participants?: Person[]; viewerContext: { category?: string; unreadCount?: number; counterParty?: Person } }
+import { account, type User } from './api.ts'
+import { loadChat, loadInbox, loadRequests, lookup, mute, read, send, store, subscribe, unread, type Convo, type Msg, type Person } from './dms.ts'
+import { ago, Avatar, Header, Icon, nameOf, P, RichText, Tabs, toast, userPath, w } from './ui.tsx'
 
 const person = (p?: Person): User => ({ fid: p?.fid || 0, username: p?.username, display_name: p?.displayName, pfp_url: p?.pfp?.url })
 const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-// newer copies of a message (the server's) replace older ones (ours, still sending)
-const merge = (a: Msg[], b: Msg[]) => [...new Map([...a, ...b].map((m) => [m.messageId, m])).values()].sort((x, y) => x.serverTimestamp - y.serverTimestamp)
-
-/** Load now and every `ms` while the tab is visible; changing `deps` starts over. */
-function usePoll<T>(load: () => Promise<T>, use: (t: T) => void, ms: number, deps: unknown[], fail: (e: Error) => void = () => {}) {
-  useEffect(() => {
-    let live = true
-    const run = () => load().then((t) => live && use(t), (e) => live && fail(e))
-    run()
-    const i = setInterval(() => document.visibilityState === 'visible' && run(), ms)
-    return () => ((live = false), clearInterval(i))
-  }, deps)
+const preview = (m: Msg) => (m.isDeleted ? 'Message deleted' : m.message || m.type.replace(/_/g, ' '))
+const MUTED = `${P.bell}M3 3l18 18`
+// the other person in a 1:1, else the group
+const face = (c: Convo) => {
+  const other = c.isGroup ? undefined : c.viewerContext.counterParty || c.participants?.find((p) => p.fid !== account!.fid)
+  return other ? { name: nameOf(person(other)), user: person(other), one: true } : { name: c.name || 'Group', user: { fid: 0, display_name: c.name || 'Group', pfp_url: c.photoUrl }, one: false }
+}
+function useStore() {
+  const [, force] = useState(0)
+  useEffect(() => subscribe(() => force((x) => x + 1)), [])
 }
 
 /** The inbox, or one conversation when `id` is given. */
@@ -55,41 +49,48 @@ function Connect() {
   )
 }
 
-const preview = (m: Msg) => (m.isDeleted ? 'Message deleted' : m.message || m.type.replace(/_/g, ' '))
+type Tab = 'inbox' | 'unread' | 'requests' | 'muted'
+const EMPTY: Record<Tab, string> = { inbox: 'No messages yet. Start one from someone’s profile.', unread: 'Nothing unread.', requests: 'No message requests.', muted: 'No muted conversations.' }
 
-// ponytail: the 50 most recent conversations per tab; page with `next.cursor` when someone needs more
+// Inbox, Unread and Muted are views of one inbox; Requests is its own list, fetched when first opened
 function Inbox() {
-  const [tab, setTab] = useState<'default' | 'request'>('default')
-  const [list, setList] = useState<Convo[] | null>(null)
-  const [requests, setRequests] = useState(0)
+  useStore()
+  const [tab, setTab] = useState<Tab>('inbox')
   const [err, setErr] = useState('')
-  useEffect(() => setList(null), [tab])
-  usePoll(() => dm('inbox', { query: { category: tab, limit: 50 } }), (r) => (setList(r.result.conversations), setRequests(r.result.requestsCount || 0), setErr('')), 15e3, [tab], (e) => setErr(e.message))
+  const fail = (e: Error) => setErr(e.message)
+  useEffect(() => void (store.inbox || loadInbox().catch(fail)), [])
+  useEffect(() => void (tab === 'requests' && !store.requests && loadRequests().catch(fail)), [tab])
+  const all = store.inbox || []
+  const unreadN = all.filter((c) => unread(c) && !c.viewerContext.muted).length
+  const list = tab === 'requests' ? store.requests : store.inbox && all.filter((c) => (tab === 'muted' ? c.viewerContext.muted : !c.viewerContext.muted && (tab === 'inbox' || unread(c))))
   return (
     <>
       <Header title="Messages">
-        <Tabs tabs={[['default', 'Inbox'], ['request', requests ? `Requests · ${requests}` : 'Requests']]} value={tab} set={setTab} />
+        <Tabs tabs={[['inbox', 'Inbox'], ['unread', unreadN ? `Unread · ${unreadN}` : 'Unread'], ['requests', store.requestsCount ? `Requests · ${store.requestsCount}` : 'Requests'], ['muted', 'Muted']]} value={tab} set={setTab} />
       </Header>
       {err && <div class="note">Couldn't load messages: {err}</div>}
       {!list && !err && <div class="spinner" />}
-      {list?.length === 0 && <div class="note">{tab === 'request' ? 'No message requests.' : 'No messages yet. Start one from someone’s profile.'}</div>}
-      {list?.map((c) => {
-        const other = c.isGroup ? undefined : c.viewerContext.counterParty
-        const name = other ? nameOf(person(other)) : c.name || 'Group'
-        const unread = c.viewerContext.unreadCount || 0
-        const last = c.lastMessage
-        return (
-          <a class={`row${unread ? ' unread' : ''}`} href={`/messages/${c.conversationId}`}>
-            <Avatar u={other ? person(other) : { fid: 0, display_name: name, pfp_url: c.photoUrl }} link={false} />
-            <span class="row-main">
-              <span class="row-top"><b>{name}</b>{last && <span class="handle">· {ago(last.serverTimestamp)}</span>}</span>
-              {last && <span class="row-sub">{last.senderFid === account!.fid ? 'You: ' : ''}{preview(last)}</span>}
-            </span>
-            {unread > 0 && <span class="unread-count">{unread}</span>}
-          </a>
-        )
-      })}
+      {list?.length === 0 && <div class="note">{EMPTY[tab]}</div>}
+      {list?.map((c) => <Row c={c} />)}
+      {/* older conversations can hold unread or muted ones too */}
+      {tab !== 'requests' && store.more && <button class="link-btn more" onClick={() => loadInbox(true).catch((e) => toast(e.message))}>Older conversations</button>}
     </>
+  )
+}
+
+function Row({ c }: { c: Convo }) {
+  const { name, user } = face(c)
+  const n = c.viewerContext.unreadCount || 0
+  const m = c.lastMessage
+  return (
+    <a class={`row${n ? ' unread' : ''}`} href={`/messages/${c.conversationId}`}>
+      <Avatar u={user} link={false} />
+      <span class="row-main">
+        <span class="row-top"><b>{name}</b>{c.viewerContext.muted && <Icon d={MUTED} size={14} />}{m && <span class="handle">· {ago(m.serverTimestamp)}</span>}</span>
+        {m && <span class="row-sub">{m.senderFid === account!.fid ? 'You: ' : ''}{preview(m)}</span>}
+      </span>
+      {n > 0 && <span class={`unread-count${c.viewerContext.muted ? ' quiet' : ''}`}>{n}</span>}
+    </a>
   )
 }
 
@@ -103,80 +104,61 @@ const Bubble = ({ m, mine, who }: { m: Msg; mine: boolean; who?: Person }) =>
   )
 
 function Chat({ id }: { id: string }) {
+  useStore()
   const me = account!.fid!
-  const [c, setC] = useState<Convo | null>(null)
-  const [msgs, setMsgs] = useState<Msg[]>([])
-  const [older, setOlder] = useState('')
+  const c = store.convos.get(id)
+  const chat = store.chats.get(id)
+  const msgs = chat?.msgs || []
   const [text, setText] = useState('')
   const [err, setErr] = useState('')
-  const first = useRef(true)
-  const read = useRef('')
   const atBottom = useRef(true)
   useEffect(() => {
-    // a conversation that doesn't exist yet is a first message to someone: a 1:1 id is the two FIDs, sorted
-    dm('conversation', { query: { conversationId: id } }).then((r) => setC(r.result.conversation), async () => {
-      const fid = /^\d+-\d+$/.test(id) ? id.split('-').map(Number).find((f) => f !== me) : undefined
-      if (!fid || !id.split('-').includes(String(me))) return setErr("This conversation isn't yours, or doesn't exist.")
-      const u = await getUser(fid).catch(() => ({ fid }) as User)
-      setC({ conversationId: id, isGroup: false, participants: [{ fid: me }, { fid, username: u.username, displayName: u.display_name, pfp: { url: u.pfp_url } }], viewerContext: { category: 'default' } })
-    })
-    const f = () => (atBottom.current = innerHeight + scrollY >= document.documentElement.scrollHeight - 120)
-    addEventListener('scroll', f, { passive: true })
-    return () => removeEventListener('scroll', f)
+    // on screen, so what arrives here is read as it comes
+    store.open = id
+    lookup(id).then((c) => read(c.conversationId), () => setErr("This conversation isn't yours, or doesn't exist."))
+    loadChat(id).catch(() => {})
+    const scroll = () => (atBottom.current = innerHeight + scrollY >= document.documentElement.scrollHeight - 120)
+    const back = () => document.visibilityState === 'visible' && read(id)
+    addEventListener('scroll', scroll, { passive: true })
+    document.addEventListener('visibilitychange', back)
+    return () => {
+      if (store.open === id) store.open = ''
+      removeEventListener('scroll', scroll)
+      document.removeEventListener('visibilitychange', back)
+    }
   }, [])
-  usePoll(() => dm('messages', { query: { conversationId: id, limit: 50 } }), (r) => {
-    setMsgs((ms) => merge(ms, r.result.messages))
-    if (first.current) (first.current = false), setOlder(r.next?.cursor || '')
-  }, 5e3, [])
-  // follow new messages while at the bottom, and tell farcaster.xyz they were read
-  useEffect(() => {
-    if (atBottom.current) scrollTo(0, document.documentElement.scrollHeight)
-    const last = msgs.at(-1)
-    if (!last || last.state || last.messageId === read.current) return
-    read.current = last.messageId
-    if (last.senderFid !== me) dm('read', { method: 'POST', body: { conversationId: id } }).then(() => dispatchEvent(new Event('dms')), () => {})
-  }, [msgs])
+  // follow new messages while at the bottom
+  const last = msgs.at(-1)?.messageId
+  useEffect(() => void (atBottom.current && scrollTo(0, document.documentElement.scrollHeight)), [msgs.length, last])
   const earlier = async () => {
-    const r = await dm('messages', { query: { conversationId: id, limit: 50, cursor: older } }).catch((e) => (toast(e.message), null))
-    if (!r) return
     const h = document.documentElement.scrollHeight
     atBottom.current = false
-    setMsgs((ms) => merge(r.result.messages, ms))
-    setOlder(r.next?.cursor || '')
+    await loadChat(id, true).catch((e) => toast(e.message))
     // keep the messages on screen where they were
     requestAnimationFrame(() => scrollBy(0, document.documentElement.scrollHeight - h))
   }
-  const others = (c?.participants || []).map((p) => p.fid).filter((f) => f !== me)
-  const send = async () => {
+  const submit = () => {
     const message = text.trim()
     if (!message || !c) return
-    // shown right away under a temporary id, swapped for farcaster.xyz's once it's sent
-    const m: Msg = { messageId: crypto.randomUUID(), senderFid: me, serverTimestamp: Date.now(), type: 'text', message, state: 'sending' }
-    const mark = (p: Partial<Msg>) => setMsgs((ms) => ms.map((x) => (x.messageId === m.messageId ? { ...x, ...p } : x)))
-    atBottom.current = true
-    setMsgs((ms) => [...ms, m])
     setText('')
-    try {
-      // replying to a request (or an archived conversation) moves it to the inbox, as farcaster.xyz does
-      const moved = c.viewerContext.category && c.viewerContext.category !== 'default'
-      if (moved) await dm('category', { method: 'POST', body: { conversationId: id, category: 'default' } })
-      const r = await dm('send', { method: 'PUT', body: { ...(c.isGroup ? { groupId: id } : { recipientFid: others[0] }), message } })
-      mark({ messageId: r.result?.messageId || m.messageId, state: undefined })
-      if (moved) setC({ ...c, viewerContext: { ...c.viewerContext, category: 'default' } })
-    } catch (e: any) {
-      mark({ state: 'failed' })
-      toast(`Couldn't send: ${e.message}`)
-    }
+    atBottom.current = true
+    send(c, message).catch((e) => toast(`Couldn't send: ${e.message}`))
   }
-  const other = c && !c.isGroup ? c.participants?.find((p) => p.fid !== me) || c.viewerContext.counterParty : undefined
-  const title = !c ? 'Messages' : other ? nameOf(person(other)) : c.name || 'Group'
+  const f = c && face(c)
+  const muted = !!c?.viewerContext.muted
+  // a conversation exists once it has messages; only then can it be muted
+  const action = c && msgs.length > 0 && (
+    <button class="icon-btn" aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'} onClick={() => mute(c, !muted).catch((e) => toast(e.message))}>
+      <Icon d={muted ? MUTED : P.bell} />
+    </button>
+  )
   return (
     <>
-      <Header title={other ? <a class="plain" href={userPath(person(other))}>{title}</a> : title} />
+      <Header title={!f ? 'Messages' : f.one ? <a class="plain" href={userPath(f.user)}>{f.name}</a> : f.name} action={action} />
       {err && <div class="note">{err}</div>}
       {c?.viewerContext.category === 'request' && <div class="banner"><div><b>Message request</b><p>Replying moves this conversation to your inbox.</p></div></div>}
       <div class="chat">
-        {older && <button class="link-btn earlier" onClick={earlier}>Earlier messages</button>}
+        {chat?.older && <button class="link-btn earlier" onClick={earlier}>Earlier messages</button>}
         {msgs.map((m, i) => {
           const prev = msgs[i - 1]
           return (
@@ -186,13 +168,14 @@ function Chat({ id }: { id: string }) {
             </Fragment>
           )
         })}
-        {!msgs.length && c && !err && <div class="note">{other ? `This is the start of your conversation with ${title}.` : 'No messages yet.'}</div>}
+        {!chat && !err && <div class="spinner" />}
+        {chat && !msgs.length && f && <div class="note">{f.one ? `This is the start of your conversation with ${f.name}.` : 'No messages yet.'}</div>}
       </div>
       {!err && (
         <div class="dm-compose">
           <textarea rows={1} value={text} placeholder="Message" maxLength={1024} aria-label="Message"
-            onInput={(e) => setText(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), send())} />
-          <button class="btn small" disabled={!text.trim() || !c} onClick={send}>Send</button>
+            onInput={(e) => setText(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), submit())} />
+          <button class="btn small" disabled={!text.trim() || !c} onClick={submit}>Send</button>
         </div>
       )}
     </>

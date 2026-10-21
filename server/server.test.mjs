@@ -160,4 +160,7 @@ test('the DM relay carries the token to the direct-cast endpoints and nowhere el
   const sent = await (await call('send', { method: 'PUT', headers: auth, body: JSON.stringify({ message: 'yo' }) })).json()
   assert.deepEqual([sent.path, sent.method, sent.body], ['/fc/message', 'PUT', { message: 'yo' }])
   assert.ok(sent.idempotency)
+  const muted = await (await call('mute', { method: 'POST', headers: auth, body: JSON.stringify({ conversationId: 'c', muted: true }) })).json()
+  assert.deepEqual([muted.path, muted.body], ['/v2/direct-cast-conversation-notifications', { conversationId: 'c', muted: true }])
+  assert.match((await fetch(base + '/')).headers.get('content-security-policy'), /connect-src [^;]*wss:\/\/ws\.farcaster\.xyz/)
 })
