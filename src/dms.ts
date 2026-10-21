@@ -27,11 +27,12 @@ export async function dm<T = any>(op: string, o: { query?: Record<string, string
 
 // --- state ---
 
-export type Box = 'default' | 'request'
+// the inbox (muted ones too, the pages filter), what farcaster.xyz says is unread in it, and requests; newest first
+export type Box = 'default' | 'unread' | 'request'
 type List = { items: Convo[] | null; more: string; pages: number }
+const empty = (): List => ({ items: null, more: '', pages: 0 })
 export const store = {
-  // the inbox (muted ones too, the pages filter) and requests, newest first
-  lists: { default: { items: null, more: '', pages: 0 }, request: { items: null, more: '', pages: 0 } } as Record<Box, List>,
+  lists: { default: empty(), unread: empty(), request: empty() } as Record<Box, List>,
   requestsCount: 0,
   convos: new Map<string, Convo>(),
   chats: new Map<string, { msgs: Msg[]; older: string }>(),
@@ -44,7 +45,7 @@ let dot: boolean | undefined
 function changed() {
   subs.forEach((f) => f())
   // the nav dot: unread conversations in the inbox that aren't muted (requests are mostly strangers, so they don't count)
-  const now = !!store.lists.default.items?.some((c) => unread(c) && !c.viewerContext.muted)
+  const now = [store.lists.default, store.lists.unread].some((l) => l.items?.some((c) => unread(c) && !c.viewerContext.muted))
   if (now !== dot) dispatchEvent(new CustomEvent('dms', { detail: (dot = now) }))
 }
 
@@ -87,19 +88,13 @@ export function load(box: Box, older = false): Promise<void> {
 }
 async function fetchPage(box: Box, older: boolean) {
   const list = store.lists[box]
-  const r = await dm('inbox', { query: { category: box, limit: 50, cursor: older ? list.more : undefined } })
-  for (const c of r.result.conversations as Convo[]) store.convos.set(c.conversationId, c)
-  page(list, r.result.conversations, r.next?.cursor, older)
-  if (box === 'default') store.requestsCount = r.result.requestsCount || 0
+  // 100 is the most farcaster.xyz gives at once
+  const r = await dm('inbox', { query: { category: box === 'request' ? 'request' : 'default', filter: box === 'unread' ? 'unread' : undefined, limit: 100, cursor: older ? list.more : undefined } })
+  // the same conversation in two lists is one object, so a change shows in both
+  const got = (r.result.conversations as Convo[]).map((c) => (store.convos.has(c.conversationId) ? Object.assign(store.convos.get(c.conversationId)!, c) : (store.convos.set(c.conversationId, c), c)))
+  page(list, got, r.next?.cursor, older)
+  if (box !== 'request') store.requestsCount = r.result.requestsCount || 0
   changed()
-}
-/** Older pages until one brings something `want` keeps, or the list ends, so a click always shows something or the end.
- *  `still` lets the page stop it (it was left, or the tab changed). */
-export async function loadOlder(box: Box, want: (c: Convo) => boolean, still = () => true) {
-  const list = store.lists[box]
-  const count = () => (list.items || []).filter(want).length
-  const before = count()
-  while (list.more && count() === before && still()) await load(box, true)
 }
 
 /** A conversation's latest messages (20 when some are already here, which is all a refresh needs), or earlier ones. */
@@ -191,21 +186,28 @@ function file(d: Convo) {
     c.photoUrl = d.photoUrl ?? c.photoUrl
     c.participants ||= d.participants
   } else store.convos.set(d.conversationId, d)
-  const conv = store.convos.get(d.conversationId)!
-  for (const box of ['default', 'request'] as const) {
-    const list = store.lists[box]
-    const here = !!list.items?.includes(conv)
-    const belongs = (conv.viewerContext.category || 'default') === box
-    if (list.items && here !== belongs) list.items = belongs ? [conv, ...list.items] : list.items.filter((x) => x !== conv)
-  }
+  place(store.convos.get(d.conversationId)!)
   changed()
 }
 
-// newest conversation on top of the inbox (requests keep their place)
+// file a conversation where it belongs now: the inbox or requests by category, and unread when it is; `top` moves it up
+function place(c: Convo, top = false) {
+  const inbox = (c.viewerContext.category || 'default') === 'default'
+  const fits: Record<Box, boolean> = { default: inbox, unread: inbox && unread(c), request: c.viewerContext.category === 'request' }
+  for (const box of Object.keys(fits) as Box[]) {
+    const list = store.lists[box]
+    if (!list.items) continue
+    const here = list.items.includes(c)
+    // the unread list only gains: what's been read since is left out when it's shown
+    if (fits[box] && (!here || top)) list.items = [c, ...list.items.filter((x) => x !== c)]
+    else if (!fits[box] && here && box !== 'unread') list.items = list.items.filter((x) => x !== c)
+  }
+}
+
+// a new message: newest conversation on top
 function bump(c: Convo, m: Msg) {
   c.lastMessage = m
-  const list = store.lists.default
-  if (c.viewerContext.category !== 'request' && list.items) list.items = [c, ...list.items.filter((x) => x.conversationId !== c.conversationId)]
+  place(c, true)
 }
 
 /** Send `text`, shown right away as "Sending…" and replaced in place by farcaster.xyz's copy once it's through. */
@@ -222,8 +224,6 @@ export async function send(c: Convo, text: string) {
     if (c.viewerContext.category && c.viewerContext.category !== 'default') {
       await dm('category', { method: 'POST', body: { conversationId: id, category: 'default' } })
       c.viewerContext.category = 'default'
-      const req = store.lists.request
-      req.items = req.items?.filter((x) => x !== c) || null
       store.requestsCount = Math.max(0, store.requestsCount - 1)
     }
     const to = c.isGroup ? { groupId: id } : { recipientFid: c.viewerContext.counterParty?.fid || c.participants?.find((p) => p.fid !== me)?.fid }
@@ -257,12 +257,12 @@ export function handle({ messageType, payload }: Event) {
     }
     // a conversation we haven't seen yet (a new one, a request, or one further down) is looked up alone
     if (!c) return refresh(id)
-    bump(c, m)
     if (!mine) {
       // on screen it's read as it arrives; otherwise it counts
       if (store.open === id && document.visibilityState === 'visible') dm('read', { method: 'POST', body: { conversationId: id } }).catch(() => {})
       else c.viewerContext.unreadCount = (c.viewerContext.unreadCount || 0) + 1
     }
+    bump(c, m)
     changed()
   } else if (messageType === 'direct-cast-read' && c) {
     c.viewerContext.unreadCount = 0

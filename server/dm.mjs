@@ -9,7 +9,7 @@ import { FC, FC_HEADERS } from './upload.mjs'
 
 const OPS = {
   nonce: ['GET', '/v2/get-dc-nonce'],
-  inbox: ['GET', '/v2/direct-cast-inbox', ['category', 'cursor', 'limit']],
+  inbox: ['GET', '/v2/direct-cast-inbox', ['category', 'filter', 'cursor', 'limit']],
   conversation: ['GET', '/v2/direct-cast-conversation', ['conversationId']],
   messages: ['GET', '/v2/direct-cast-conversation-messages', ['conversationId', 'cursor', 'limit']],
   // sending goes through the newer /fc API, which takes this token (direct-cast-send wants a full session)

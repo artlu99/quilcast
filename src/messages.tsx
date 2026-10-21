@@ -2,7 +2,7 @@
 import { Fragment } from 'preact'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { account, safeUrl, type User } from './api.ts'
-import { autoDelete, details, load, loadChat, loadOlder, lookup, mute, read, send, store, subscribe, unread, type Box, type Convo, type Msg, type Person } from './dms.ts'
+import { autoDelete, details, load, loadChat, lookup, mute, read, send, store, subscribe, unread, type Box, type Convo, type Msg, type Person } from './dms.ts'
 import { isImg, sized } from './shared.ts'
 import { ago, Avatar, Header, Icon, Img, Menu, nameOf, P, RichText, shell, Tabs, toast, userPath, w } from './ui.tsx'
 
@@ -76,7 +76,8 @@ function Connect() {
 
 type Tab = 'inbox' | 'unread' | 'requests' | 'muted'
 const EMPTY: Record<Tab, string> = { inbox: 'No messages yet. Start one from someone’s profile.', unread: 'Nothing unread.', requests: 'No message requests.', muted: 'No muted conversations.' }
-// Inbox, Unread and Muted are views of one inbox; Requests is its own list, fetched when first opened
+// Unread and Requests are lists farcaster.xyz filters; Inbox and Muted are views of the inbox (muted has no filter there)
+const BOX: Record<Tab, Box> = { inbox: 'default', unread: 'unread', requests: 'request', muted: 'default' }
 const MATCH: Record<Tab, (c: Convo) => boolean> = {
   inbox: (c) => !c.viewerContext.muted,
   unread: (c) => unread(c) && !c.viewerContext.muted,
@@ -89,34 +90,37 @@ function Inbox() {
   const [tab, setTab] = useState<Tab>('inbox')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [olderErr, setOlderErr] = useState('')
-  const box: Box = tab === 'requests' ? 'request' : 'default'
+  const box = BOX[tab]
   const list = store.lists[box]
-  useEffect(() => void (list.items || load(box).catch((e) => setErr(e.message))), [box])
-  // a scan in progress stops when the tab changes or the page is left
-  const live = useRef(tab)
-  useEffect(() => ((live.current = tab), () => void (live.current = '' as Tab)), [tab])
+  // the unread list is small and gives the tab its count, so it comes along
+  useEffect(() => void (list.items || load(box).catch((e) => setErr(e.message)), store.lists.unread.items || load('unread').catch(() => {})), [box])
   const shown = list.items?.filter(MATCH[tab])
-  const unreadN = store.lists.default.items?.filter(MATCH.unread).length
-  // older pages until this tab gets something new, or the list ends (then the button goes)
-  const older = async () => {
-    const mine = tab
-    setBusy(true)
-    setOlderErr('')
-    await loadOlder(box, MATCH[tab], () => live.current === mine).catch((e) => setOlderErr(e.message))
-    setBusy(false)
-  }
+  const unreadN = (store.lists.unread.items || store.lists.default.items)?.filter(MATCH.unread).length
+  // infinite scroll: whenever the end of the list is near the screen, the next page loads. It's re-armed after every
+  // render, so pages that add nothing to this tab (Muted) keep loading until the screen fills or the list ends.
+  const end = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!list.items || !list.more || busy || err) return
+    const o = new IntersectionObserver((e) => {
+      if (!e[0].isIntersecting) return
+      o.disconnect()
+      setBusy(true)
+      load(box, true).catch((e) => setErr(e.message)).finally(() => setBusy(false))
+    }, { rootMargin: '600px' })
+    end.current && o.observe(end.current)
+    return () => o.disconnect()
+  })
   return (
     <>
       <Header title="Messages">
         <Tabs tabs={[['inbox', 'Inbox'], ['unread', unreadN ? `Unread · ${unreadN}` : 'Unread'], ['requests', store.requestsCount ? `Requests · ${store.requestsCount}` : 'Requests'], ['muted', 'Muted']]} value={tab} set={setTab} />
       </Header>
-      {err && <div class="note">Couldn't load messages: {err}</div>}
+      {err && <div class="note">Couldn't load messages: {err} <button class="link-btn" onClick={() => (setErr(''), list.items || load(box).catch((e) => setErr(e.message)))}>Retry</button></div>}
       {!shown && !err && <div class="spinner" />}
-      {shown?.length === 0 && <div class="note">{EMPTY[tab]}</div>}
+      {shown?.length === 0 && !list.more && <div class="note">{EMPTY[tab]}</div>}
       {shown?.map((c) => <Row key={c.conversationId} c={c} />)}
-      {shown && list.more && <button class="link-btn more" disabled={busy} onClick={older}>{busy ? `Loading… ${list.items?.length} checked` : tab === 'requests' ? 'Older requests' : 'Older conversations'}</button>}
-      {olderErr && <div class="note">Couldn't load older conversations: {olderErr}</div>}
+      {busy && <div class="spinner" />}
+      <div ref={end} />
     </>
   )
 }
