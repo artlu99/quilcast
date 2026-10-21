@@ -54,6 +54,14 @@ async function read(url) {
       return u ? httpUrl(new URL(u, r.url).href) : undefined
     } catch {}
   }
+  // the button opens the app itself, at action.url or this page
+  const act = app?.button?.action
+  const launch = /^launch_(miniapp|frame)$/.test(act?.type) && {
+    url: abs(act.url || r.url),
+    name: clip(act.name, 60),
+    splash: abs(act.splashImageUrl),
+    bg: /^#[0-9a-f]{3,8}$/i.test(act.splashBackgroundColor) ? act.splashBackgroundColor : undefined,
+  }
   return {
     url: r.url,
     title: clip(meta['og:title'] || meta['twitter:title'] || title, 300),
@@ -61,6 +69,7 @@ async function read(url) {
     image: abs(app?.imageUrl || meta['og:image'] || meta['og:image:url'] || meta['twitter:image'] || meta['twitter:image:src']),
     button: clip(app?.button?.title, 40),
     icon: abs(icon || '/favicon.ico'),
+    app: launch?.url ? launch : undefined,
   }
 }
 

@@ -164,3 +164,34 @@ test('the DM relay carries the token to the direct-cast endpoints and nowhere el
   assert.deepEqual([muted.path, muted.body], ['/v2/direct-cast-conversation-notifications', { conversationId: 'c', muted: true }])
   assert.match((await fetch(base + '/')).headers.get('content-security-policy'), /connect-src [^;]*wss:\/\/ws\.farcaster\.xyz/)
 })
+
+test('mini app notifications: tokens per inbox, the spec answer, rate limits, same-domain targets, drop', async () => {
+  const post = (path, body) => fetch(base + path, { method: 'POST', body: JSON.stringify(body) })
+  const inbox = 'ab'.repeat(32)
+  const t = await (await post('/api/notify/token', { inbox, origin: 'https://app.example', name: 'App' })).json()
+  assert.equal(t.url, 'https://quilcast.test/api/notify')
+  // one token per app and inbox
+  assert.equal((await (await post('/api/notify/token', { inbox, origin: 'https://app.example' })).json()).token, t.token)
+  assert.equal((await post('/api/notify/token', { inbox: 'short', origin: 'https://app.example' })).status, 400)
+  assert.equal((await post('/api/notify/token', { inbox, origin: 'http://app.example' })).status, 400)
+  const send = (id, extra = {}) => post('/api/notify', { notificationId: id, title: 'Hi', body: 'There', targetUrl: 'https://app.example/x', tokens: [t.token, 'nope'], ...extra })
+  assert.deepEqual((await (await send('n1')).json()).result, { successfulTokens: [t.token], invalidTokens: ['nope'], rateLimitedTokens: [] })
+  // the same id again counts as sent, a new one within 30 s is rate limited
+  assert.deepEqual((await (await send('n1')).json()).result.successfulTokens, [t.token])
+  assert.deepEqual((await (await send('n2')).json()).result.rateLimitedTokens, [t.token])
+  // a target off the app's domain doesn't go out
+  assert.deepEqual((await (await send('n3', { targetUrl: 'https://evil.example/' })).json()).result.invalidTokens, [t.token, 'nope'])
+  assert.equal((await send('n4', { title: 'x'.repeat(33) })).status, 400)
+  const items = (await (await fetch(base + '/api/notify/inbox', { headers: { 'x-inbox': inbox } })).json()).items
+  assert.deepEqual(items.map((i) => [i.notificationId, i.title, i.targetUrl, i.name]), [['n1', 'Hi', 'https://app.example/x', 'App']])
+  assert.equal((await fetch(base + '/api/notify/inbox')).status, 400)
+  // push only to browsers' push services; webhook events must be signed by the key they name
+  assert.equal((await post('/api/notify/push', { inbox, subscription: { endpoint: 'https://evil.example/', keys: { p256dh: 'x', auth: 'y' } } })).status, 400)
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  const event = { header: b64({ fid: 1, type: 'app_key', key: '0x' + '11'.repeat(32) }), payload: b64({ event: 'miniapp_added' }), signature: Buffer.alloc(64).toString('base64url') }
+  assert.equal((await post('/api/notify/event', { origin: 'https://app.example', event })).status, 400)
+  assert.match((await (await fetch(base + '/api/notify/vapid')).json()).key, /^B[\w-]{86}$/)
+  // signing out drops the inbox and its tokens
+  await post('/api/notify/drop', { inbox })
+  assert.deepEqual((await (await send('n5')).json()).result.invalidTokens, [t.token, 'nope'])
+})

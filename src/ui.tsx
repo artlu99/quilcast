@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, back, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
 import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from './shared.ts'
+import type { AppMeta } from './miniapp.tsx'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -9,11 +10,15 @@ export const w = () => import('./write.ts')
 // module-level hooks the shell fills in, so any component can toast or open the composer
 export const shell = {
   toast: (_: string) => {},
-  compose: (_: { parent?: Cast; quote?: Cast; channel?: string } = {}) => {},
+  // text, embeds and onDone come from mini apps; onDone gets the new cast's hash, or null if nothing was posted
+  compose: (_: { parent?: Cast; quote?: Cast; channel?: string; text?: string; embeds?: string[]; onDone?: (hash: string | null) => void } = {}) => {},
   view: (_urls: string[], _index: number) => {},
 }
 export const toast = (m: string) => shell.toast(m)
 export const requireAccount = () => (account?.done ? true : (go('/join'), false))
+/** Open a mini app (src/miniapp.tsx, loaded on first use). */
+export const launchApp = (m: AppMeta, ctx?: { cast?: Cast; embed?: string }) => requireAccount() && import('./miniapp.tsx').then((x) => x.launch(m, ctx))
+export const launchUrl = (url: string) => requireAccount() && import('./miniapp.tsx').then((x) => x.launchUrl(url))
 
 export const P = {
   home: 'M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
@@ -37,6 +42,9 @@ export const P = {
   mail: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6',
   plus: 'M12 5v14M5 12h14',
   check: 'M20 6 9 17l-5-5',
+  min: 'M6 12h12',
+  wallet: 'M19 7V5a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V6M16.5 13.5h.01',
+  apps: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
 }
 export const Icon = ({ d, fill, size = 18 }: { d: string; fill?: boolean; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={fill ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -210,7 +218,7 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
 }
 
 type Tweet = { text: string; author: { name?: string; handle?: string; avatar?: string }; at?: number; photos: string[]; video?: string; likes?: number; replies?: number; reposts?: number; quote?: { name?: string; handle?: string; text?: string } }
-type Unfurl = { url: string; title?: string; description?: string; image?: string; button?: string; icon?: string; tweet?: Tweet } | null
+type Unfurl = { url: string; title?: string; description?: string; image?: string; button?: string; icon?: string; tweet?: Tweet; app?: AppMeta } | null
 
 function TweetCard({ u, t }: { u: string; t: Tweet }) {
   const video = safeUrl(t.video)
@@ -231,13 +239,14 @@ function TweetCard({ u, t }: { u: string; t: Tweet }) {
   )
 }
 const unfurls = new Map<string, Promise<Unfurl>>()
-const unfurl = (u: string) => {
+export const unfurl = (u: string) => {
   if (!unfurls.has(u)) unfurls.set(u, fetch(`/api/unfurl?url=${encodeURIComponent(u)}`).then((r) => r.json(), () => null))
   return unfurls.get(u)!
 }
 
-// Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives
-export function LinkCard({ u: given }: { u: string }) {
+// Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives.
+// In a cast (`c`), a mini app's card opens the app.
+export function LinkCard({ u: given, c }: { u: string; c?: Cast }) {
   const u = safeUrl(given)
   const [d, setD] = useState<Unfurl>()
   useEffect(() => void (u && unfurl(u).then(setD)), [u])
@@ -247,8 +256,10 @@ export function LinkCard({ u: given }: { u: string }) {
   // a link straight to an image renders as the image
   if (image && d?.image === d?.url) return <Media urls={[image]} />
   const icon = safeUrl(d?.icon)
+  const app = c && d?.app
   return (
-    <a class={`linkcard${image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
+    <a class={`linkcard${image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow"
+      onClick={(e) => (stop(e), app && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.preventDefault(), launchApp({ ...app, icon }, { cast: c, embed: u })))}>
       {image && <Img class="lc-img" src={sized(image, 'w=1200')} />}
       <span class="lc-text">
         <span class="lc-site">{icon && <Img src={icon} />}{new URL(u).hostname.replace(/^www\./, '')}</span>
@@ -294,7 +305,7 @@ function Embeds({ c }: { c: Cast }) {
   const all = (
     <>
       <Media urls={urls} />
-      {links.map((u) => <LinkCard u={u} />)}
+      {links.map((u) => <LinkCard u={u} c={c} />)}
       {quotes.map((h) => <QuoteCard hash={h} />)}
     </>
   )

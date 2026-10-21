@@ -108,3 +108,26 @@ test('KEY_ADD and fname proofs keep their exact bytes, and what a wallet signs h
     Date.now = now
   }
 })
+
+test('on-chain key calldata matches viem, with a SignedKeyRequest the validator would accept', async () => {
+  const { encodeAbiParameters, encodeFunctionData, recoverTypedDataAddress } = await import('viem')
+  const { base58, keyCustody, keyGatewayAdd, keyRegistryRemove } = await import('./fc.ts')
+  const custody = keyCustody(new Uint8Array(32).fill(9))
+  const key = new Uint8Array(32).fill(5)
+  const data = await keyGatewayAdd(42, custody, key, 1800000000)
+  // pull the signature back out of the encoded metadata and check who signed what
+  const sig = ('0x' + data.slice(2 + 8 + 64 * 13, 2 + 8 + 64 * 13 + 130)) as `0x${string}`
+  const signer = await recoverTypedDataAddress({
+    domain: { name: 'Farcaster SignedKeyRequestValidator', version: '1', chainId: 10, verifyingContract: '0x00000000fc700472606ed4fa22623acf62c60553' },
+    types: { SignedKeyRequest: [{ name: 'requestFid', type: 'uint256' }, { name: 'key', type: 'bytes' }, { name: 'deadline', type: 'uint256' }] },
+    primaryType: 'SignedKeyRequest', message: { requestFid: 42n, key: `0x${'05'.repeat(32)}`, deadline: 1800000000n }, signature: sig,
+  })
+  assert.equal(signer.toLowerCase(), custody.address)
+  const metadata = encodeAbiParameters([{ type: 'tuple', components: [{ name: 'requestFid', type: 'uint256' }, { name: 'requestSigner', type: 'address' }, { name: 'signature', type: 'bytes' }, { name: 'deadline', type: 'uint256' }] }],
+    [{ requestFid: 42n, requestSigner: custody.address as `0x${string}`, signature: sig, deadline: 1800000000n }])
+  const abi = [{ type: 'function', name: 'add', inputs: [{ type: 'uint32' }, { type: 'bytes' }, { type: 'uint8' }, { type: 'bytes' }], outputs: [], stateMutability: 'nonpayable' }, { type: 'function', name: 'remove', inputs: [{ type: 'bytes' }], outputs: [], stateMutability: 'nonpayable' }] as const
+  assert.equal(data, encodeFunctionData({ abi, functionName: 'add', args: [1, `0x${'05'.repeat(32)}`, 1, metadata] }))
+  assert.equal(keyRegistryRemove(key), encodeFunctionData({ abi, functionName: 'remove', args: [`0x${'05'.repeat(32)}`] }))
+  assert.equal(base58(new TextEncoder().encode('hello world')), 'StV1DL6CwTryKyV')
+  assert.equal(base58(Uint8Array.of(0, 0, 1)), '112')
+})

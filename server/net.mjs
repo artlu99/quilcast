@@ -32,8 +32,9 @@ function safeLookup(host, opts, cb) {
   })
 }
 
-/** GET a public URL. Resolves { status, type, body, url, truncated }; rejects on anything not allowed. */
-export function safeGet(url, { max = 2e6, timeout = 6000, headers = {}, hops = 4, deadline = Date.now() + timeout } = {}) {
+/** GET (or, with `method` and `body`, send to) a public URL. Resolves { status, type, body, url, truncated };
+ *  rejects on anything not allowed. Only GETs follow redirects. */
+export function safeGet(url, { max = 2e6, timeout = 6000, headers = {}, hops = 4, deadline = Date.now() + timeout, method = 'GET', body } = {}) {
   return new Promise((resolve, reject) => {
     let u
     try {
@@ -46,9 +47,9 @@ export function safeGet(url, { max = 2e6, timeout = 6000, headers = {}, hops = 4
       return reject(new Error('url not allowed'))
     const left = deadline - Date.now()
     if (left <= 0) return reject(new Error('timeout'))
-    const req = (u.protocol === 'https:' ? https : http).get(u, { headers: { 'user-agent': UA, 'accept-encoding': 'identity', ...headers }, lookup: safeLookup, agent: false }, (res) => {
+    const req = (u.protocol === 'https:' ? https : http).request(u, { method, headers: { 'user-agent': UA, 'accept-encoding': 'identity', ...headers }, lookup: safeLookup, agent: false }, (res) => {
       const loc = res.headers.location
-      if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
+      if (method === 'GET' && res.statusCode >= 300 && res.statusCode < 400 && loc) {
         res.resume()
         clearTimeout(timer)
         if (!hops) return reject(new Error('too many redirects'))
@@ -78,6 +79,7 @@ export function safeGet(url, { max = 2e6, timeout = 6000, headers = {}, hops = 4
     })
     const timer = setTimeout(() => req.destroy(new Error('timeout')), left)
     req.on('error', (e) => (clearTimeout(timer), reject(e)))
+    req.end(body)
   })
 }
 
@@ -132,3 +134,14 @@ export const keep = (map, max, k, v) => (map.size >= max && map.delete(map.keys(
 
 /** An error that carries the HTTP status to answer with. */
 export const fail = (status, message) => Object.assign(new Error(message), { status })
+
+/** A request's JSON body, up to `max` characters. */
+export async function readJson(req, max = 16e3) {
+  let s = ''
+  for await (const c of req) if ((s += c).length > max) throw fail(413, 'too long')
+  try {
+    return JSON.parse(s)
+  } catch {
+    throw fail(400, 'bad json')
+  }
+}

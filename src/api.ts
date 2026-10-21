@@ -15,7 +15,9 @@ export const saveSettings = () => save('quilcast:settings', settings)
 
 // a phrase account keeps its recovery phrase; a wallet account has phrase '' and signs with `wallet` (its custody address)
 // `dm` is a farcaster.xyz token that opens the account's direct casts and nothing else
-export type Account = { phrase: string; wallet?: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean; dm?: string }
+// `appKey` is the on-chain key mini app webhooks are signed with; `inbox` is the secret for this browser's mini app
+// notifications on our server, and `notify` lists the app origins that may send them
+export type Account = { phrase: string; wallet?: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean; dm?: string; appKey?: string; inbox?: string; notify?: string[] }
 // every account this browser holds; `account` is the selected one, keyed by its wallet or its phrase
 export const idOf = (a: Account) => a.wallet || a.phrase
 export let accounts = read<Account[]>('quilcast:accounts', [])
@@ -130,9 +132,18 @@ export async function hydrateParents(casts: Cast[]) {
   await loadUsers(casts.map((c) => c.parent_author?.fid))
   return casts
 }
+/** By username. The node's by-username only knows fnames, so ENS names like "shoni.eth" come from search (exact match only). */
+export async function byName(name: string): Promise<User> {
+  name = name.toLowerCase()
+  const r = await get('/v2/farcaster/user/by-username', { username: name }).catch(() => null)
+  if (r?.user) return r.user
+  const u = (await findUsers(name)).find((x) => x.username?.toLowerCase() === name)
+  if (!u) throw new Error('User not found')
+  return u
+}
 /** A user fresh from the node (by FID, or by username for anything else); also remembered in `users`. */
 export async function getUser(id: number | string) {
-  const u: User = (await (/^\d+$/.test(String(id)) ? get('/v2/farcaster/user', { fid: id }) : get('/v2/farcaster/user/by-username', { username: id }))).user
+  const u: User = /^\d+$/.test(String(id)) ? (await get('/v2/farcaster/user', { fid: id })).user : await byName(String(id))
   users.set(u.fid, u)
   return u
 }

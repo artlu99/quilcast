@@ -422,6 +422,56 @@ small.warn { color: var(--warn); }
 }
 @keyframes fade { from { opacity: 0; } }
 
+/* ---------- mini apps ---------- */
+/* a window over the page's right side (the whole screen on a phone); the dock under it lists every open app */
+.mini { position: fixed; z-index: 9; right: 16px; bottom: 76px; width: 424px; height: min(695px, calc(100vh - 92px)); display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; box-shadow: 0 24px 60px rgb(0 0 0 / 0.3); animation: fade 0.15s; }
+.mini.away { display: none; }
+.mini-top { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--line); flex: none; }
+.mini-top > .app-icon { width: 28px; height: 28px; font-size: 13px; }
+.mini-name { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.mini-name b, .mini-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-name small { color: var(--muted); font-size: 12px; }
+.mini-body { position: relative; flex: 1; min-height: 0; }
+.mini-body iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+.splash { position: absolute; inset: 0; display: grid; place-items: center; background: var(--card); }
+.splash img { width: 96px; height: 96px; border-radius: 22px; object-fit: cover; }
+.mini-wait { position: absolute; left: 12px; right: 12px; top: 12px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; background: var(--ink); color: var(--bg); font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); }
+.mini-ask { position: absolute; inset: 0; display: flex; align-items: flex-end; background: rgb(10 8 20 / 0.45); animation: fade 0.15s; }
+.ask-card { width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 18px 16px 16px; background: var(--card); border-radius: 18px 18px 0 0; }
+.ask-card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.ask-card > .app-icon { width: 44px; height: 44px; font-size: 18px; }
+.ask-card .accounts { border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.ask-card .acct.on { background: var(--soft); }
+.ask-card .btns { justify-content: flex-end; margin-top: 4px; }
+.mini-primary { flex: none; margin: 8px 12px 12px; padding: 12px; }
+.app-icon { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; object-fit: cover; background: var(--soft); color: var(--muted); font-weight: 700; flex: none; }
+.wallet-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--line); background: none; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.menu .wname { flex: 1; }
+.wallet-icon { width: 18px; height: 18px; border-radius: 4px; flex: none; }
+.dock { position: fixed; z-index: 9; right: 16px; bottom: 16px; display: flex; gap: 6px; padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 99px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.16); }
+.dock button { padding: 2px; border: 2px solid transparent; border-radius: 12px; background: none; display: grid; }
+.dock button.on { border-color: var(--accent); }
+.dock .app-icon { width: 34px; height: 34px; font-size: 14px; border-radius: 9px; }
+.app-open { display: flex; gap: 8px; }
+.app-row .icon-btn.on { color: var(--accent); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.ask-card .field { margin: 0; }
+.app-note { width: 100%; border: 0; background: none; text-align: left; color: var(--ink); align-items: flex-start; }
+.app-note .note-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.app-row { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 14px; padding: 6px 6px 6px 10px; }
+.app-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; border: 0; background: none; text-align: left; padding: 2px 0; }
+.app-main > span:not(.app-icon) { display: flex; flex-direction: column; min-width: 0; }
+.app-main b, .app-main small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-main small { color: var(--muted); font-size: 13px; }
+@media (max-width: 699px) {
+  .mini { inset: 0; width: auto; height: auto; border: 0; border-radius: 0; padding-bottom: env(safe-area-inset-bottom); }
+  .mini-top { padding-top: calc(6px + env(safe-area-inset-top)); }
+  /* above the tab bar, clear of the cast button */
+  .dock { right: auto; left: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); }
+  .dock.behind { display: none; }
+}
+
 .toast { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 20; background: var(--ink); color: var(--bg); padding: 10px 18px; border-radius: 99px; font-size: 14px; font-weight: 550; max-width: calc(100vw - 32px); box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); animation: fade 0.2s; }
 .skel { display: flex; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .skel i { width: 40px; height: 40px; border-radius: 99px; background: var(--soft); flex: none; }

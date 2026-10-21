@@ -139,6 +139,39 @@ export async function keyAdd(fid: number, custody: Custody, signerPriv: Uint8Arr
   return envelope(MT.KEY_ADD, fid, pb([1, key], [2, 1], [3, custodySig], [4, deadline], [5, nonce], [6, metadata], [7, 1], [9, SCOPES], [10, ttl]), signerPriv)
 }
 
+// Farcaster's key contracts on Optimism, for the one on-chain key mini app webhooks are signed with
+export const KEY_GATEWAY = '0x00000000fc56947c7e7183f8ca4b62398caadf0b'
+export const KEY_REGISTRY = '0x00000000fc1237824fb747abde0ff18990e59b7e'
+const selector = (sig: string) => keccak_256(utf8(sig)).slice(0, 4)
+
+/** KeyGateway.add calldata registering `key` for the custody's own fid, with a SignedKeyRequest the custody
+ *  signs for itself (requestFid = fid). `deadline` is in Unix seconds. */
+export async function keyGatewayAdd(fid: number, custody: Custody, key: Uint8Array, deadline: number) {
+  const sig = await custody.typed({
+    domain: { name: 'Farcaster SignedKeyRequestValidator', version: '1', chainId: 10, verifyingContract: '0x00000000fc700472606ed4fa22623acf62c60553' },
+    primaryType: 'SignedKeyRequest',
+    types: { SignedKeyRequest: [n('requestFid', 'uint256'), n('key', 'bytes'), n('deadline', 'uint256')] },
+    message: { requestFid: fid, key: '0x' + hex(key), deadline },
+  })
+  const metadata = concat(word(32), word(fid), word(BigInt(custody.address)), word(128), word(deadline), word(65), sig, new Uint8Array(31))
+  // add(uint32 keyType = 1, bytes key, uint8 metadataType = 1, bytes metadata)
+  return '0x' + hex(concat(selector('add(uint32,bytes,uint8,bytes)'), word(1), word(128), word(1), word(192), word(32), key, word(metadata.length), metadata))
+}
+/** KeyRegistry.remove calldata for a 32-byte key. */
+export const keyRegistryRemove = (key: Uint8Array) => '0x' + hex(concat(selector('remove(bytes)'), word(32), word(32), key))
+
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+/** Base58 (Bitcoin alphabet), as Solana writes keys and signatures. */
+export function base58(b: Uint8Array) {
+  let s = ''
+  for (let x = BigInt('0x0' + hex(b)); x > 0n; x /= 58n) s = B58[Number(x % 58n)] + s
+  for (const byte of b) {
+    if (byte) break
+    s = '1' + s
+  }
+  return s
+}
+
 /** KEY_REMOVE signed by the signer itself (Hypersnap self-revocation): no custody signature needed. */
 export const keyRemoveSelf = (fid: number, signerPriv: Uint8Array, nonce: number) =>
   envelope(MT.KEY_REMOVE, fid, pb([1, ed25519.getPublicKey(signerPriv)], [3, 2], [4, fcNow() + 3600], [5, nonce]), signerPriv)

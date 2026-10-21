@@ -34,12 +34,14 @@ export const rlp = (x: R): Uint8Array =>
 export const registerData = (custody: string) => `0x${sel('register(address)')}${arg(custody)}` as const
 
 /** Call IdGateway.register from the custody key, paying `value`. Returns the tx hash. */
-export async function register(url: string, custody: Uint8Array, value: bigint) {
+export const register = (url: string, custody: Uint8Array, value: bigint) => sendTx(url, custody, ID_GATEWAY, registerData(address(custody)), value)
+
+/** Send a transaction on Optimism from the custody key. Returns the tx hash. */
+export async function sendTx(url: string, custody: Uint8Array, to: string, data: string, value = 0n) {
   const from = address(custody)
-  const data = registerData(from)
   const [nonce, gas, base, tip] = await Promise.all([
     rpc(url, 'eth_getTransactionCount', [from, 'latest']),
-    rpc(url, 'eth_estimateGas', [{ from, to: ID_GATEWAY, data, value: '0x' + value.toString(16) }]),
+    rpc(url, 'eth_estimateGas', [{ from, to, data, value: '0x' + value.toString(16) }]),
     rpc(url, 'eth_gasPrice'),
     rpc(url, 'eth_maxPriorityFeePerGas'),
   ])
@@ -47,7 +49,7 @@ export async function register(url: string, custody: Uint8Array, value: bigint) 
   const limit = (BigInt(gas) * 13n) / 10n
   // Optimism gas costs a tiny fraction of a gwei; refuse numbers a broken or hostile RPC might hand us
   if (value > 10n ** 16n || maxFee > 10n ** 10n || limit > 2_000_000n) throw new Error('The Optimism RPC returned unexpected fees. Check the RPC in settings.')
-  const fields: R[] = [10n, BigInt(nonce), BigInt(tip), maxFee, limit, unhex(ID_GATEWAY), value, unhex(data), []]
+  const fields: R[] = [10n, BigInt(nonce), BigInt(tip), maxFee, limit, unhex(to), value, unhex(data), []]
     .map((f) => (typeof f === 'bigint' ? be(f) : f))
   const { rs, v } = ecSign(keccak_256(concat(Uint8Array.of(2), rlp(fields))), custody)
   const raw = concat(Uint8Array.of(2), rlp([...fields, be(v), be(BigInt('0x' + hex(rs.slice(0, 32)))), be(BigInt('0x' + hex(rs.slice(32))))]))

@@ -4,7 +4,7 @@
 // along on each request and is never kept or logged, and only these endpoints are reachable. Live updates
 // don't come through here: the browser listens on farcaster.xyz's websocket itself (dms.ts).
 import { randomUUID } from 'node:crypto'
-import { fail } from './net.mjs'
+import { fail, readJson as json } from './net.mjs'
 import { FC, FC_HEADERS } from './upload.mjs'
 
 const OPS = {
@@ -18,16 +18,6 @@ const OPS = {
   category: ['POST', '/v2/direct-cast-conversation-categorization'],
   mute: ['POST', '/v2/direct-cast-conversation-notifications'],
   ttl: ['POST', '/v2/direct-cast-conversation-message-ttl'],
-}
-
-async function json(req) {
-  let s = ''
-  for await (const c of req) if ((s += c).length > 16e3) throw fail(413, 'too long')
-  try {
-    return JSON.parse(s)
-  } catch {
-    throw fail(400, 'bad json')
-  }
 }
 
 /** Relay one call; resolves { status, body } with farcaster.xyz's own answer. */

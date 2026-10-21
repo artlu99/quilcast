@@ -2,9 +2,10 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { HDKey } from '@scure/bip32'
-import { account, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
+import { account, byName, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
 import { dm } from './dms.ts'
-import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, keyCustody, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
+import { balance, sendTx } from './eth.ts'
+import { castBody, castRemoveBody, envelope, followBody, hex, KEY_GATEWAY, KEY_REGISTRY, keyAdd, keyCustody, keyGatewayAdd, keyRegistryRemove, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
 
 const keys = new Map<string, Promise<Uint8Array>>()
 /** Custody key derived the way Warpcast and Quorum do it (BIP-39 seed, m/44'/60'/0'/0/0), so phrases
@@ -50,6 +51,56 @@ export async function ensureSigner(a = account!) {
   setAccount({ ...a, signer: hex(priv), signerAt: now, nonce, scopes: SCOPES_VERSION })
 }
 
+/** A transaction on Optimism from the account's custody: its wallet, or the phrase key (which needs a little ETH there). */
+async function custodyTx(a: Account, to: string, data: string) {
+  if (a.wallet) return (await import('./wallet.ts')).sendTx(a.wallet, to, data)
+  const key = await custodyKey(a.phrase)
+  const { address } = keyCustody(key)
+  if ((await balance(settings.rpc, address)) === 0n) throw new Error(`Your account address ${address} needs a little ETH on Optimism (a cent's worth) to pay for this.`)
+  return sendTx(settings.rpc, key, to, data)
+}
+
+const onChain = async (fid: number, key: Uint8Array) =>
+  ((await get('/v1/onChainSignersByFid', { fid }).catch(() => ({ events: [] }))).events as { signerEventBody?: { key?: string } }[])
+    .some((e) => e.signerEventBody?.key?.toLowerCase() === '0x' + hex(key))
+
+/** The key mini app webhook events are signed with. Apps check it against Farcaster's KeyRegistry, which the
+ *  Hypersnap signer isn't in, so this one is added on chain (KeyGateway.add from the custody), once per browser. */
+export async function ensureAppKey(onWait?: (what: string) => void) {
+  let a = account!
+  if (!a.appKey) {
+    const priv = ed25519.utils.randomSecretKey()
+    onWait?.(a.wallet ? 'Confirm the key in your wallet (Optimism)' : 'Adding a notification key on Optimism…')
+    await custodyTx(a, KEY_GATEWAY, await keyGatewayAdd(a.fid!, await custodyOf(a), ed25519.getPublicKey(priv), Math.floor(Date.now() / 1000) + 3600))
+    // kept as soon as the transaction is out, so a reload doesn't add a second key
+    setAccount((a = { ...account!, appKey: hex(priv) }))
+  }
+  const priv = unhex(a.appKey!)
+  onWait?.('Waiting for the network to see the key…')
+  for (let i = 0; !(await onChain(a.fid!, ed25519.getPublicKey(priv))); i++) {
+    if (i >= 40) throw new Error('The notification key is still being confirmed. Try again in a minute.')
+    await new Promise((r) => setTimeout(r, 3000))
+  }
+  return priv
+}
+
+const b64url = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+/** A JSON Farcaster Signature over `payload`, signed with the app key: what mini app webhooks receive. */
+export async function signEvent(payload: object, onWait?: (what: string) => void) {
+  const priv = await ensureAppKey(onWait)
+  const enc = new TextEncoder()
+  const header = b64url(enc.encode(JSON.stringify({ fid: account!.fid, type: 'app_key', key: '0x' + hex(ed25519.getPublicKey(priv)) })))
+  const body = b64url(enc.encode(JSON.stringify(payload)))
+  return { header, payload: body, signature: b64url(ed25519.sign(enc.encode(`${header}.${body}`), priv)) }
+}
+
+/** Sign out, step one: the on-chain app key is removed (KeyRegistry.remove from the custody), and the
+ *  notification inbox on our server is dropped. */
+export async function removeAppKey(a: Account) {
+  if (a.inbox) await fetch('/api/notify/drop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inbox: a.inbox }) }).catch(() => {})
+  if (a.appKey && a.fid) await custodyTx(a, KEY_REGISTRY, keyRegistryRemove(ed25519.getPublicKey(unhex(a.appKey))))
+}
+
 /** Sign out: this browser's signer revokes itself, so a copy of the key stops working too. */
 export async function revokeSigner(a: Account) {
   if (a.signer && a.fid) await submit(keyRemoveSelf(a.fid, unhex(a.signer), Math.floor(Date.now() / 1000)))
@@ -60,7 +111,7 @@ const send = async (type: number, body: Uint8Array) => {
   return submit(envelope(type, account!.fid!, body, unhex(account!.signer!)))
 }
 
-const fidByName = async (name: string) => (await get('/v2/farcaster/user/by-username', { username: name }).catch(() => null))?.user?.fid as number | undefined
+const fidByName = (name: string) => byName(name).then((u) => u.fid, () => undefined)
 
 /** A cast can carry two embeds: uploads and a quoted cast first, then links from the text. */
 export async function post(text: string, o: { parent?: CastRef; channel?: string; quote?: CastRef; media?: string[] } = {}) {

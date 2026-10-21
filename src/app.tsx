@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { castText, n } from './shared.ts'
-import { ago, Avatar, CastCard, fetchCast, handle, Header, Icon, Lightbox, Logo, Menu, nameOf, P, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, Avatar, CastCard, fetchCast, handle, Header, Icon, Img, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
+import type { AppMeta } from './miniapp.tsx'
 import './style.css'
 
 // views most visits never open load when first needed
@@ -221,8 +222,35 @@ async function quotesOfMine(): Promise<Note[]> {
   return [...quotes.values()].map((q) => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp }))
 }
 
+type AppNote = { id: string; app: string; name: string; icon?: string; notificationId: string; title: string; body: string; targetUrl: string; at: number }
+/** This browser's mini app notifications, kept by our server under the account's inbox secret. */
+const appNotes = (): Promise<AppNote[]> =>
+  account?.inbox ? fetch('/api/notify/inbox', { headers: { 'x-inbox': account.inbox } }).then((r) => (r.ok ? r.json() : { items: [] })).then((j) => j.items, () => []) : Promise.resolve([])
+const openNote = (n: AppNote) => requireAccount() && import('./miniapp.tsx').then((m) => m.launch({ url: n.targetUrl, name: n.name, icon: n.icon }, { notification: { notificationId: n.notificationId, title: n.title, body: n.body } }))
+
+function AppNotes() {
+  const [list, setList] = useState<AppNote[] | null>(null)
+  useEffect(() => void appNotes().then(setList), [])
+  if (!list) return <div class="spinner" />
+  if (!list.length) return <div class="note">Mini apps you turned notifications on for will show up here.</div>
+  return (
+    <>
+      {list.map((n) => (
+        <button class="note-row app-note" onClick={() => openNote(n)}>
+          {n.icon ? <Img class="app-icon" src={n.icon} /> : <span class="app-icon">{[...n.name][0]}</span>}
+          <span class="note-body">
+            <span><b>{n.name}</b> <span class="muted">· {ago(n.at)}</span></span>
+            <b>{n.title}</b>
+            <span class="note-cast">{n.body}</span>
+          </span>
+        </button>
+      ))}
+    </>
+  )
+}
+
 function Notifications() {
-  const [tab, setTab] = useState<'all' | 'replies'>('all')
+  const [tab, setTab] = useState<'all' | 'replies' | 'apps'>('all')
   const [round, reload] = useReload()
   // one lookup per visit or reload: switching tabs reuses it
   const quotes = useMemo(() => (account?.done ? quotesOfMine().catch(() => []) : Promise.resolve([])), [round])
@@ -236,9 +264,9 @@ function Notifications() {
   return (
     <>
       <Header title="Notifications">
-        <Tabs tabs={[['all', 'All'], ['replies', 'Replies & mentions']]} value={tab} set={(t) => (t === tab ? reload() : setTab(t))} />
+        <Tabs tabs={[['all', 'All'], ['replies', 'Replies & mentions'], ...(account.inbox ? [['apps', 'Mini apps'] as ['apps', string]] : [])]} value={tab} set={(t) => (t === tab ? reload() : setTab(t))} />
       </Header>
-      <Pager<Note> k={`${tab}:${round}`} empty="Nothing yet. When people reply, like or follow you, it shows up here."
+      {tab === 'apps' ? <AppNotes key={round} /> : <Pager<Note> k={`${tab}:${round}`} empty="Nothing yet. When people reply, like or follow you, it shows up here."
         id={(n) => `${n.type}:${n.cast?.hash}:${n.user.fid}:${n.timestamp}`}
         row={(ns) => group(ns).map((g) => <NoteRow key={g.key} g={g} />)}
         load={async (cursor) => {
@@ -254,7 +282,7 @@ function Notifications() {
             .filter((n) => n.user && (tab === 'all' || (n.cast && !ACT(n.type))))
           await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
           return { items, cursor: next }
-        }} />
+        }} />}
     </>
   )
 }
@@ -267,10 +295,10 @@ function useUnread() {
     // unchanged values keep the same object, so nothing re-renders
     const set = (k: keyof typeof unread, v: boolean) => setUnread((u) => (u[k] === v ? u : { ...u, [k]: v }))
     const check = () =>
-      get('/v2/farcaster/notifications', { fid: account!.fid, limit: 1 }).then((r) => {
-        const t = r.notifications[0] && Date.parse(r.notifications[0].timestamp)
+      Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 1 }).catch(() => null), appNotes()]).then(([r, notes]) => {
+        const t = Math.max((r?.notifications[0] && Date.parse(r.notifications[0].timestamp)) || 0, notes[0]?.at || 0)
         set('notifications', !!t && t > Number(localStorage.getItem(seenKey()) || 0))
-      }, () => {})
+      })
     check()
     const i = setInterval(check, 60000)
     const seen = () => set('notifications', false)
@@ -460,6 +488,93 @@ function Search() {
   )
 }
 
+/** Mini apps added from inside them (addMiniApp), their notifications, and a box to open any by its link. */
+function Apps() {
+  const [list, setList] = useState(() => read<AppMeta[]>('quilcast:apps', []))
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState('')
+  const [push, setPush] = useState(() => 'Notification' in window && Notification.permission === 'granted')
+  const [, force] = useState(0)
+  const m = () => import('./miniapp.tsx')
+  useEffect(() => {
+    // a tapped push notification lands here as ?n=<id>
+    const n = new URLSearchParams(location.search).get('n')
+    if (!n) return
+    history.replaceState(null, '', '/apps')
+    appNotes().then((all) => {
+      const hit = all.find((x) => x.id === n)
+      hit && openNote(hit)
+    })
+  }, [])
+  const origin = (a: AppMeta) => new URL(a.url).origin
+  const on = (a: AppMeta) => !!account?.notify?.includes(origin(a))
+  const run = async (key: string, f: () => Promise<unknown>) => {
+    setBusy(key)
+    try {
+      await f()
+    } catch (e: any) {
+      toast(e.message)
+    }
+    setBusy('')
+    force((x) => x + 1)
+  }
+  const bell = (a: AppMeta) => {
+    // the browser only asks for permission from a click, so that comes first
+    const asked = !on(a) && m().then((x) => x.askPush())
+    run(a.url, async () => {
+      const x = await m()
+      await x.setNotify(a, !on(a), undefined, setBusy)
+      if (asked && (await asked) === 'granted') await x.enablePush().then(() => setPush(true), () => {})
+    })
+  }
+  const remove = (a: AppMeta) =>
+    run(a.url, async () => {
+      if (on(a)) await (await m()).setNotify(a, false, 'miniapp_removed').catch(() => {})
+      const next = read<AppMeta[]>('quilcast:apps', []).filter((x) => x.url !== a.url)
+      save('quilcast:apps', next)
+      setList(next)
+    })
+  const togglePush = () => {
+    const asked = !push && m().then((x) => x.askPush())
+    run('push', async () => {
+      const x = await m()
+      if (push) await x.disablePush(), setPush(false)
+      else if ((await asked) === 'granted') await x.enablePush(), setPush(true)
+      else throw new Error('Notifications are blocked for Quilcast in this browser.')
+    })
+  }
+  const openTyped = () => url.trim() && launchUrl(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`)
+  return (
+    <>
+      <Header title="Mini apps" />
+      <div class="settings">
+        <div class="app-open">
+          <input value={url} onInput={(e) => setUrl(e.currentTarget.value)} onKeyDown={(e) => e.key === 'Enter' && openTyped()} placeholder="Paste a mini app link" aria-label="Mini app link" inputMode="url" />
+          <button class="btn small" onClick={openTyped} disabled={!url.trim()}>Open</button>
+        </div>
+        {!list.length && <p class="hint">Mini apps open from casts. The ones you add show up here.</p>}
+        {list.map((a) => (
+          <div class="app-row">
+            <button class="app-main" onClick={() => launchApp(a)}>
+              {a.icon ? <Img class="app-icon" src={a.icon} /> : <span class="app-icon">{[...(a.name || '?')][0]}</span>}
+              <span><b>{a.name}</b><small>{busy === a.url ? 'Working…' : new URL(a.url).host}</small></span>
+            </button>
+            {account?.done && <button class={`icon-btn${on(a) ? ' on' : ''}`} disabled={!!busy} aria-pressed={on(a)} aria-label={`Notifications from ${a.name}`} title={on(a) ? 'Notifications on' : 'Notifications off'} onClick={() => bell(a)}><Icon d={P.bell} fill={on(a)} /></button>}
+            <button class="icon-btn" disabled={!!busy} aria-label={`Remove ${a.name}`} onClick={() => remove(a)}><Icon d={P.trash} /></button>
+          </div>
+        ))}
+        {busy && busy !== 'push' && !list.some((x) => x.url === busy) && <p class="hint">{busy}</p>}
+        {account?.done && (
+          <section>
+            <div class="setting"><span>Push notifications on this device</span><button class="btn ghost small" disabled={busy === 'push'} onClick={togglePush}>{push ? 'Turn off' : 'Turn on'}</button></div>
+            <p class="hint">Turning notifications on for an app the first time adds a notification key to your account on Optimism, which costs a cent or less in gas. Apps check that key, and signing out removes it.</p>
+          </section>
+        )}
+      </div>
+    </>
+  )
+}
+
 function Settings() {
   const [, force] = useState(0)
   const [prof, setProf] = useState<Record<number, string>>({})
@@ -512,9 +627,11 @@ function Settings() {
     if (out === 'ask') {
       setOut('busy')
       try {
-        await (await w()).revokeSigner(account!)
+        const m = await w()
+        await m.removeAppKey(account!)
+        await m.revokeSigner(account!)
       } catch (e: any) {
-        toast(`The signing key couldn't be revoked: ${e.message}`)
+        toast(`The signing keys couldn't be revoked: ${e.message}`)
         asked.current = Date.now()
         return setOut('stuck')
       }
@@ -639,7 +756,10 @@ function App() {
   const [r0, r1, r2] = useRoute()
   const unread = useUnread()
   const [viewer, setViewer] = useState<{ urls: string[]; index: number } | null>(null)
-  shell.compose = (o = {}) => setCompose(o)
+  // a mini app can't replace a draft that's already open
+  const composing = useRef(false)
+  composing.current = !!compose
+  shell.compose = (o = {}) => (o.onDone && composing.current ? o.onDone(null) : setCompose(o))
   shell.view = (urls, index) => setViewer({ urls, index })
   useEffect(() => {
     const f = () => force((x) => x + 1)
@@ -661,9 +781,10 @@ function App() {
           : r0 === 'notifications' ? <Notifications />
           : r0 === 'messages' ? <Messages id={r1 && decode(r1)} />
           : r0 === 'settings' ? <Settings />
+          : r0 === 'apps' ? <Apps />
             : r0 === 'join' ? <><Header /><Join step={r1} /></>
               : <Home />
-  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell], ['messages', 'Messages', P.mail]] as [string, string, string][] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
+  const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell], ['messages', 'Messages', P.mail], ['apps', 'Mini apps', P.apps]] as [string, string, string][] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
   const href = (k: string) => (k === 'u' ? userPath(me!) : `/${k}`)
   const active = (k: string) => (k === 'u' ? r0 === 'u' && !!me && userPath(me) === `/u/${r1}` : r0 === k)
   const ico = (k: string, d: string) => <span class="ico"><Icon d={d} size={22} />{unread[k as keyof typeof unread] && <i class="badge" />}</span>

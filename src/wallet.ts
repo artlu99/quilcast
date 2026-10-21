@@ -55,7 +55,10 @@ export const walletCustody = (address: string): Custody => {
 }
 
 /** Pay for IdGateway.register from the wallet on Optimism. Returns the tx hash. */
-export async function register(address: string, value: bigint) {
+export const register = (address: string, value: bigint) => sendTx(address, ID_GATEWAY, registerData(address), value)
+
+/** Send a transaction on Optimism from the wallet. Returns the tx hash. */
+export async function sendTx(address: string, to: string, data: string, value = 0n) {
   const account = address as `0x${string}`
-  return tidy(on(10).then((c) => c.sendTransaction({ account, chain: optimism, to: ID_GATEWAY, data: registerData(address), value })))
+  return tidy(on(10).then((c) => c.sendTransaction({ account, chain: optimism, to: to as `0x${string}`, data: data as `0x${string}`, value })))
 }

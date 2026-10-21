@@ -13,10 +13,15 @@ import { fetchJson, gate, imageInfo, keep, safeGet } from './net.mjs'
 import { dm } from './dm.mjs'
 import { cached, unfurl } from './unfurl.mjs'
 import { chunk, done, EXT, MEDIA, start, status } from './upload.mjs'
+import { load, route as notifyRoute } from './notify.mjs'
+import { keys as vapidKeys } from './push.mjs'
 
 const NODE = process.env.NODE_URL || 'https://haatz.quilibrium.com'
 const SITE = process.env.SITE_URL || 'https://quilcast.com'
 const DIST = new URL('../dist/', import.meta.url).pathname
+// notification tokens and the push key live in the data volume with the uploads (/m/ only serves media names)
+const DATA = process.env.DATA_DIR || MEDIA
+load(DATA)
 const FONTS = ['Inter-Regular.ttf', 'Inter-Bold.ttf', 'NotoEmoji.ttf'].map((f) => new URL(`fonts/${f}`, import.meta.url).pathname)
 
 // a stray rejection somewhere must not take the whole server down
@@ -27,12 +32,12 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 // --- headers ---
 
 // The app keeps users' keys in localStorage, so scripts may only come from this origin, and the
-// page may not be framed. Images and video come from anywhere (avatars, embeds, CDNs); the node
+// page may not be framed. Mini apps are https pages framed by the app (src/miniapp.tsx sandboxes them). Images and video come from anywhere (avatars, embeds, CDNs); the node
 // and RPC URLs are user settings, hence https: for connect-src; messages update over farcaster.xyz's websocket.
 const CSP = [
   "default-src 'self'", "script-src 'self'", "style-src 'self'", 'img-src * data: blob:', 'media-src * data: blob:',
   "connect-src 'self' https: wss://ws.farcaster.xyz http://localhost:* http://127.0.0.1:*", "worker-src 'self' blob:", "font-src 'self'", "manifest-src 'self'",
-  "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src 'none'", "frame-ancestors 'none'",
+  "object-src 'none'", "base-uri 'none'", "form-action 'none'", "frame-src https:", "frame-ancestors 'none'",
 ].join('; ')
 const SECURITY = {
   'content-security-policy': CSP,
@@ -41,7 +46,8 @@ const SECURITY = {
   'strict-transport-security': 'max-age=31536000; includeSubDomains',
   'referrer-policy': 'no-referrer',
   'cross-origin-opener-policy': 'same-origin',
-  'permissions-policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
+  // camera and microphone can be handed to a mini app's frame (its allow attribute, set per app the person allowed); nothing else
+  'permissions-policy': 'camera=*, microphone=*, geolocation=(), usb=(), payment=()',
 }
 
 // --- abuse limits ---
@@ -187,7 +193,10 @@ const pngs = new Map()
 // a miss isn't kept, so the next request asks the node again
 const lookup = (k, path, pick) => cache.get(k) || keep(cache, 1000, k, fetchJson(NODE + path).then((r) => pick(r) || (cache.delete(k), null)))
 const getCast = (hash) => lookup(hash, `/v2/farcaster/cast?identifier=${hash}&type=hash`, (r) => r?.cast)
-const getUser = (name) => lookup(`u:${name}`, /^\d+$/.test(name) ? `/v2/farcaster/user?fid=${name}` : `/v2/farcaster/user/by-username?username=${encodeURIComponent(name)}`, (r) => r?.user)
+// by-username only knows fnames; ENS names ("shoni.eth") are found by search, exact match only
+const byName = (name) => fetchJson(`${NODE}/v2/farcaster/user/by-username?username=${encodeURIComponent(name)}`).then((r) => r?.user ||
+  fetchJson(`${NODE}/v2/farcaster/user/search?q=${encodeURIComponent(name)}&limit=10`).then((s) => (s?.users || s?.result?.users || []).find((u) => u.username?.toLowerCase() === name.toLowerCase())))
+const getUser = (name) => cache.get(`u:${name}`) || keep(cache, 1000, `u:${name}`, (/^\d+$/.test(name) ? fetchJson(`${NODE}/v2/farcaster/user?fid=${name}`).then((r) => r?.user) : byName(name)).then((u) => u || (cache.delete(`u:${name}`), null)))
 
 const index = await readFile(join(DIST, 'index.html'), 'utf8')
 // swap the default title/description/url/image in index.html for page-specific ones; replacements
@@ -256,6 +265,15 @@ createServer(async (req, res) => {
       const err = r instanceof Error
       if (err && !r.status) console.error('upload', r)
       return json(err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Upload failed' } : r)
+    }
+
+    if (path === '/api/notify' || path.startsWith('/api/notify/') || path === '/api/manifest') {
+      // apps' servers send notifications in bursts; everything else is one browser's own calls
+      if (limited(`notify:${path === '/api/notify' ? 'send' : path}:${ip}`, path === '/api/notify' ? 600 : path === '/api/notify/inbox' ? 120 : 30)) return json(429, { error: 'Slow down a little.' })
+      const r = await (notifyRoute(req, path, url, SITE, () => vapidKeys(DATA).public) || Promise.reject(Object.assign(new Error('not found'), { status: 404 }))).catch((e) => e)
+      const err = r instanceof Error
+      if (err && !r.status) console.error('notify', r)
+      return json(err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Something went wrong.' } : r)
     }
 
     const op = path.match(/^\/api\/dm\/(\w{1,20})$/)?.[1]
