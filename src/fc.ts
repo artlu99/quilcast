@@ -49,7 +49,8 @@ export const SCOPES_VERSION = 2
 
 const castId = (fid: number, hash: string) => pb([1, fid], [2, unhex(hash)])
 const BODY_FIELD: Record<number, number> = { 1: 5, 2: 6, 3: 7, 4: 7, 5: 14, 6: 14, 11: 12, 16: 19, 17: 20 }
-const FC_EPOCH = 1609459200
+// message timestamps and key deadlines count seconds from the Farcaster epoch (2021-01-01)
+const fcNow = () => Math.floor(Date.now() / 1000) - 1609459200
 
 export type CastRef = { fid: number; hash: string }
 // parent is a cast (reply) or a channel URL; embeds are URLs or a quoted cast
@@ -71,7 +72,7 @@ export const castRemoveBody = (hash: string) => pb([1, unhex(hash)])
 
 /** Sign MessageData with an ed25519 key, return the Message envelope and its hash. */
 export function envelope(type: number, fid: number, body: Uint8Array, signerPriv: Uint8Array) {
-  const data = pb([1, type], [2, fid], [3, Math.floor(Date.now() / 1000) - FC_EPOCH], [4, 1], [BODY_FIELD[type], body])
+  const data = pb([1, type], [2, fid], [3, fcNow()], [4, 1], [BODY_FIELD[type], body])
   const hash = blake3(data, { dkLen: 20 })
   // hypersnap merges read `data` while hashing uses `data_bytes`: send both
   const msg = pb([1, data], [2, hash], [3, 1], [4, ed25519.sign(hash, signerPriv)], [5, 1], [6, ed25519.getPublicKey(signerPriv)], [7, data])
@@ -120,8 +121,8 @@ const n = (name: string, type: string) => ({ name, type })
 /** KEY_ADD that registers `signerPriv` for `fid` without an on-chain tx (Hypersnap gasless signers). */
 export async function keyAdd(fid: number, custody: Custody, signerPriv: Uint8Array, nonce: number) {
   const key = ed25519.getPublicKey(signerPriv)
-  // Farcaster-epoch seconds: Hypersnap checks the deadline against the message timestamp, which uses that epoch
-  const deadline = Math.floor(Date.now() / 1000) - FC_EPOCH + 3600
+  // Hypersnap checks the deadline against the message timestamp, so it counts from the same epoch
+  const deadline = fcNow() + 3600
   const ttl = 90 * 86400
   const skr = await custody.typed({
     domain: KEY_ADD_DOMAIN, primaryType: 'SignedKeyRequest',
@@ -140,7 +141,7 @@ export async function keyAdd(fid: number, custody: Custody, signerPriv: Uint8Arr
 
 /** KEY_REMOVE signed by the signer itself (Hypersnap self-revocation): no custody signature needed. */
 export const keyRemoveSelf = (fid: number, signerPriv: Uint8Array, nonce: number) =>
-  envelope(MT.KEY_REMOVE, fid, pb([1, ed25519.getPublicKey(signerPriv)], [3, 2], [4, Math.floor(Date.now() / 1000) - FC_EPOCH + 3600], [5, nonce]), signerPriv)
+  envelope(MT.KEY_REMOVE, fid, pb([1, ed25519.getPublicKey(signerPriv)], [3, 2], [4, fcNow() + 3600], [5, nonce]), signerPriv)
 
 /** Signature the fname server wants to assign `name` to the custody address. */
 export async function fnameProof(name: string, timestamp: number, custody: Custody) {

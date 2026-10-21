@@ -11,6 +11,9 @@ WORKDIR /app
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
 COPY server server
+# the server imports the helpers it shares with the app as TypeScript (Node strips the types)
+COPY package.json ./
+COPY src/shared.ts src/
 ENV PORT=3000
 EXPOSE 3000
 # the media volume (/data) is owned by uid 1000

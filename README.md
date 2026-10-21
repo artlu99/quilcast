@@ -15,6 +15,7 @@ Live at **[quilcast.com](https://quilcast.com)**.
 - Cast, reply, quote, like, recast, follow, delete your own casts, post into a channel. A new cast shows as "Posting…" until the network has indexed it
 - Attach up to two photos or videos per cast. Photos are re-encoded in the browser (≤2048 px JPEG, no EXIF). Uploads go through `/api/upload` to Farcaster's CDN the way Quorum does it, using a 10-minute farcaster.xyz token the browser signs with your custody key. Farcaster only gives upload URLs to accounts that have a Warpcast signer, so other accounts' files are stored on the server and served from `/m/<hash>`
 - HLS video plays natively where the browser supports it and through hls.js (loaded on first play) in Firefox-based browsers
+- Avatars and feed images load from Farcaster's image CDN at the size they're shown; the image viewer opens the original
 - Create a new account: a recovery phrase is generated locally, you send about $0.20 of ETH on Optimism to it, and Quilcast registers the FID with `IdGateway.register`, adds a gasless Hypersnap signer (`KEY_ADD`) and claims your fname
 - Sign in with an existing recovery phrase (the same derivation as Warpcast and Quorum, so phrases work across apps)
 - Or use an external wallet (MetaMask, Rabby, OKX or whatever injects `window.ethereum`) as the custody address. The wallet signs the `KEY_ADD` (two EIP-712 signatures on chain 1), the fname proof and upload logins, and pays for registration on Optimism. Quilcast holds only the signer key it adds. viem drives the wallet and loads only when someone connects one
@@ -29,10 +30,11 @@ Channel pages aren't there because Hypersnap (and upstream Snapchain) can't list
 | `src/fc.ts` | Protobuf encoding, ed25519 message signing, EIP-712 (`KeyAdd`, `SignedKeyRequest`, fname proofs) |
 | `src/eth.ts` | Optimism JSON-RPC, RLP and EIP-1559 signing for the one registration transaction |
 | `src/api.ts` | Hypersnap reads and the locally stored account |
+| `src/shared.ts` | Helpers the app and the server share: cast text with mentions, media checks, CDN image sizes |
 | `src/write.ts` | Signed writes, loaded on demand so readers don't download the crypto |
 | `src/wallet.ts` | External wallets through viem: connect, chain switching, typed data and message signing, the registration transaction |
 | `src/app.tsx`, `src/join.tsx` | Preact UI |
-| `server/index.mjs` | Serves `dist/`, fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
+| `server/index.mjs` | Serves `dist/` (brotli or gzip), fills in meta tags for `/c/<hash>` and `/u/<name>`, renders 1200×630 cast cards at `/og/c/<hash>.png` with resvg, serves `/m/` uploads |
 | `server/upload.mjs` | `/api/upload`: Farcaster CDN relay with a local fallback |
 | `server/unfurl.mjs` | `/api/unfurl`: Open Graph metadata for link previews, public hosts only |
 

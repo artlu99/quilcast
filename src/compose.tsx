@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, get, go, LINK_RE, toUrl, users, type Cast, type User } from './api.ts'
-import { Avatar, channelUrl, handle, Icon, LinkCard, P, QuoteCard, toast, w } from './ui.tsx'
+import { account, findUsers, get, go, LINK_RE, myUser, toUrl, type Cast, type User } from './api.ts'
+import { castText } from './shared.ts'
+import { Avatar, channelUrl, handle, Icon, LinkCard, Menu, nameOf, P, QuoteCard, toast, w } from './ui.tsx'
 
 type Attachment = { id: number; preview: string; video: boolean; url?: string; err?: string; stage?: 'uploading' | 'processing'; pct?: number; left?: number }
 const bytes = (s: string) => new TextEncoder().encode(s).length
@@ -16,13 +17,13 @@ function ChannelPicker({ value, set }: { value?: string; set: (v?: string) => vo
   }, [q])
   return (
     <span class="wrap-menu">
-      <button class={`chip${value ? ' on' : ''}`} onClick={() => setOpen(!open)} aria-haspopup="listbox"><Icon d={P.hash} size={14} />{value ? `/${value}` : 'Channel'}</button>
+      <button class={`chip${value ? ' on' : ''}`} onClick={() => setOpen(!open)} aria-haspopup="menu"><Icon d={P.hash} size={14} />{value ? `/${value}` : 'Channel'}</button>
       {open && (
-        <div class="menu picker">
+        <Menu class="picker" close={() => setOpen(false)}>
           <input autoFocus value={q} onInput={(e) => setQ(e.currentTarget.value)} placeholder="Search channels" aria-label="Search channels" />
           {value && <button onClick={() => (set(undefined), setOpen(false))}>No channel</button>}
           {list.map((c) => <button onClick={() => (set(c.id), setOpen(false), setQ(''))}>/{c.id}<small>{c.member_count ?? ''}</small></button>)}
-        </div>
+        </Menu>
       )}
     </span>
   )
@@ -56,11 +57,8 @@ function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, pla
   }
   useEffect(() => {
     if (!tok) return setSug([])
-    const t = setTimeout(() => get('/v2/farcaster/user/search', { q: tok.q, limit: 30 }).then((r) => {
-      const rank = (u: User) => (u.username === tok.q ? 1e12 : u.username?.startsWith(tok.q) ? 1e10 : 0) + (u.follower_count || 0)
-      setSug(((r.users || []) as User[]).filter((u) => u.username && !u.username.startsWith('fid:')).sort((a, b) => rank(b) - rank(a)).slice(0, 6))
-      setSel(0)
-    }, () => {}), 200)
+    // only people with a username can be @mentioned
+    const t = setTimeout(() => findUsers(tok.q).then((us) => (setSug(us.filter((u) => u.username && !u.username.startsWith('fid:')).slice(0, 6)), setSel(0)), () => {}), 200)
     return () => clearTimeout(t)
   }, [tok?.q])
   const mention = (u: User) => {
@@ -88,7 +86,7 @@ function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, pla
   return (
     <div class={`part${last ? '' : ' threaded'}`} onClick={onFocus}>
       <div class="editor">
-        {account && <Avatar u={users.get(account.fid!) || { fid: account.fid!, username: account.username }} size={36} link={false} />}
+        {account && <Avatar u={myUser()!} size={36} link={false} />}
         <textarea ref={ref} value={part.text} rows={1} placeholder={placeholder}
           onInput={(e) => (set({ text: e.currentTarget.value }), findToken(e.currentTarget))}
           onKeyDown={keys} onClick={(e) => findToken(e.currentTarget)} onFocus={onFocus}
@@ -100,7 +98,7 @@ function PartEditor({ part, set, first, last, quote, focus, onFocus, attach, pla
           {sug.map((u, i) => (
             <button role="option" aria-selected={i === sel} class={i === sel ? 'on' : ''} onMouseDown={(e) => (e.preventDefault(), mention(u))}>
               <Avatar u={u} size={28} link={false} />
-              <b>{u.display_name || u.username}</b><span class="handle">@{u.username}</span>
+              <b>{nameOf(u)}</b><span class="handle">@{u.username}</span>
             </button>
           ))}
         </div>
@@ -195,7 +193,7 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
         {parent && (
           <div class="ctx">
             <Avatar u={parent.author} size={28} link={false} />
-            <div><b>{parent.author.display_name || handle(parent.author)}</b> <span class="handle">@{handle(parent.author)}</span><p>{parent.text.slice(0, 200)}</p></div>
+            <div><b>{nameOf(parent.author)}</b> <span class="handle">@{handle(parent.author)}</span><p>{castText(parent).slice(0, 200)}</p></div>
           </div>
         )}
         <div class="parts">
@@ -213,7 +211,7 @@ export function Composer({ parent, quote, channel: initial, onClose }: { parent?
           <span class={`count${left < 50 ? ' warn' : ''}`} title={bytes(cur.text) > 320 ? 'Long cast: up to 1024 characters' : 'Up to 320 characters, or 1024 as a long cast'}>
             {bytes(cur.text) > 280 ? left : ''}
           </span>
-          <button class="icon-btn add-part" aria-label="Add another post to the thread" disabled={!filled(cur, active)} onClick={add}><Icon d="M12 5v14M5 12h14" /></button>
+          <button class="icon-btn add-part" aria-label="Add another post to the thread" disabled={!filled(cur, active)} onClick={add}><Icon d={P.plus} /></button>
         </div>
       </div>
     </div>

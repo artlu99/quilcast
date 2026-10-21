@@ -1,50 +1,21 @@
 :root {
-  --bg: #fff;
-  --card: #fff;
-  --ink: #0f1419;
-  --muted: #64676f;
-  --line: #e8e8ec;
-  --soft: #f4f4f6;
-  --hover: rgb(15 20 25 / 0.035);
-  --accent: #6447f5;
-  --accent-soft: #efecff;
-  --like: #e0245e;
-  --recast: #00a67d;
-  --warn: #c2410c;
-  color-scheme: light;
+  /* one value per theme: the system picks unless Settings forces data-theme */
+  color-scheme: light dark;
+  --bg: light-dark(#fff, #0b0b0f);
+  --card: light-dark(#fff, #131319);
+  --ink: light-dark(#0f1419, #ececf1);
+  --muted: light-dark(#64676f, #8b8b98);
+  --line: light-dark(#e8e8ec, #23232b);
+  --soft: light-dark(#f4f4f6, #1a1a21);
+  --hover: light-dark(rgb(15 20 25 / 0.035), rgb(255 255 255 / 0.03));
+  --accent: light-dark(#6447f5, #8f7bff);
+  --accent-soft: light-dark(#efecff, #221d3d);
+  --like: light-dark(#e0245e, #f9518e);
+  --recast: light-dark(#00a67d, #2fd08c);
+  --warn: light-dark(#c2410c, #fb923c);
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #0b0b0f;
-    --card: #131319;
-    --ink: #ececf1;
-    --muted: #8b8b98;
-    --line: #23232b;
-    --soft: #1a1a21;
-    --hover: rgb(255 255 255 / 0.03);
-    --accent: #8f7bff;
-    --accent-soft: #221d3d;
-    --like: #f9518e;
-    --recast: #2fd08c;
-    --warn: #fb923c;
-    color-scheme: dark;
-  }
-}
-:root[data-theme='dark'] {
-  --bg: #0b0b0f;
-  --card: #131319;
-  --ink: #ececf1;
-  --muted: #8b8b98;
-  --line: #23232b;
-  --soft: #1a1a21;
-  --hover: rgb(255 255 255 / 0.03);
-  --accent: #8f7bff;
-  --accent-soft: #221d3d;
-  --like: #f9518e;
-  --recast: #2fd08c;
-  --warn: #fb923c;
-  color-scheme: dark;
-}
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -231,8 +202,10 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .lc-text { display: flex; flex-direction: column; gap: 1px; padding: 9px 12px; min-width: 0; font-size: 14px; }
 .lc-site { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-site img { width: 14px; height: 14px; border-radius: 3px; flex: none; }
-.lc-title { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.lc-desc { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* clamped text; each sets its own line count */
+.clamp, .lc-title, .lc-desc, .tw-text, .tw-quote p, .note-cast, .ctx p { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.lc-title { font-weight: 600; -webkit-line-clamp: 2; }
+.lc-desc { color: var(--muted); -webkit-line-clamp: 2; }
 .lc-btn { margin: 0 12px 10px; padding: 7px; border-radius: 10px; background: var(--soft); text-align: center; font-weight: 600; font-size: 14px; }
 .tweet { margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; cursor: pointer; }
 .tweet:hover { background: var(--hover); }
@@ -240,12 +213,12 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .tw-head .handle { overflow: hidden; text-overflow: ellipsis; }
 .tw-av { width: 22px; height: 22px; border-radius: 99px; flex: none; }
 .tw-x { margin-left: auto; flex: none; color: var(--ink); }
-.tw-text { margin-top: 6px; font-size: 15px; display: -webkit-box; -webkit-line-clamp: 10; -webkit-box-orient: vertical; overflow: hidden; }
+.tw-text { margin-top: 6px; font-size: 15px; -webkit-line-clamp: 10; }
 .tw-video { position: relative; margin-top: 10px; border-radius: 12px; overflow: hidden; background: #000; }
 .tw-video img { width: 100%; max-height: 420px; object-fit: cover; display: block; }
 .tw-video .play { pointer-events: none; }
 .tw-quote { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
-.tw-quote p { margin: 2px 0 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tw-quote p { margin: 2px 0 0; color: var(--muted); -webkit-line-clamp: 3; }
 .tw-stats { display: flex; gap: 14px; margin-top: 8px; color: var(--muted); font-size: 13px; }
 .quote { display: block; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); font-size: 14px; }
 .quote:hover { background: var(--hover); text-decoration: none; }
@@ -253,7 +226,7 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .quote .meta span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .qbody { display: flex; gap: 10px; }
 .qbody .text { flex: 1; min-width: 0; }
-.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.clamp { -webkit-line-clamp: 4; }
 .qimg { width: 76px; height: 76px; object-fit: cover; border-radius: 10px; margin-top: 4px; flex: none; }
 .qbody.bare { display: block; }
 .bare .qimg { display: block; width: auto; height: auto; max-width: 100%; max-height: 300px; margin-top: 8px; }
@@ -290,7 +263,7 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .note-icon.fo { color: var(--accent); }
 .note-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
 .note-avatars { display: flex; gap: 4px; }
-.note-cast { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.note-cast { color: var(--muted); -webkit-line-clamp: 2; }
 
 /* profile & lists */
 .profile { padding: 16px; }
@@ -387,7 +360,7 @@ small.warn { color: var(--warn); }
 .sheet-top { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; }
 .ctx { display: flex; gap: 10px; margin: 6px 0 2px; font-size: 14px; position: relative; }
 .ctx::after { content: ''; position: absolute; left: 13px; top: 32px; bottom: -14px; width: 2px; background: var(--line); }
-.ctx p { margin: 2px 0 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ctx p { margin: 2px 0 0; color: var(--muted); -webkit-line-clamp: 3; }
 .editor { display: flex; gap: 10px; margin-top: 10px; }
 .parts { max-height: 65vh; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .part { position: relative; padding-bottom: 6px; }

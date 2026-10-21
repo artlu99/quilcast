@@ -2,7 +2,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { keccak_256 } from '@noble/hashes/sha3.js'
 import { HDKey } from '@scure/bip32'
-import { account, fidByName, LINK_RE, posting, setAccount, settings, toUrl, users, type Account, type Cast } from './api.ts'
+import { account, get, LINK_RE, myUser, posting, setAccount, settings, toUrl, type Account, type Cast } from './api.ts'
 import { castBody, castRemoveBody, envelope, followBody, hex, keyAdd, keyCustody, keyRemoveSelf, mentions, MT, reactionBody, SCOPES_VERSION, unhex, userDataBody, type CastRef, type Custody } from './fc.ts'
 
 const keys = new Map<string, Promise<Uint8Array>>()
@@ -28,11 +28,11 @@ async function submit(m: { msg: Uint8Array; hash: string }) {
   const r = await fetch(`${settings.node}/v1/submitMessage`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: m.msg as BodyInit })
   if (!r.ok) {
     const t = await r.text()
-    let msg = t
+    let j: { details?: string; message?: string } = {}
     try {
-      msg = JSON.parse(t).details || JSON.parse(t).message || t
+      j = JSON.parse(t)
     } catch {}
-    throw new Error(msg || `HTTP ${r.status}`)
+    throw new Error(j.details || j.message || t || `HTTP ${r.status}`)
   }
   return m.hash
 }
@@ -59,6 +59,8 @@ const send = async (type: number, body: Uint8Array) => {
   return submit(envelope(type, account!.fid!, body, unhex(account!.signer!)))
 }
 
+const fidByName = async (name: string) => (await get('/v2/farcaster/user/by-username', { username: name }).catch(() => null))?.user?.fid as number | undefined
+
 /** A cast can carry two embeds: uploads and a quoted cast first, then links from the text. */
 export async function post(text: string, o: { parent?: CastRef; channel?: string; quote?: CastRef; media?: string[] } = {}) {
   const m = await mentions(text, fidByName)
@@ -66,7 +68,7 @@ export async function post(text: string, o: { parent?: CastRef; channel?: string
   for (const u of new Set((m.text.match(LINK_RE) || []).map(toUrl))) embeds.length < 2 && embeds.push(u)
   const hash = await send(MT.CAST_ADD, castBody({ ...m, parent: o.parent || o.channel, embeds: embeds.slice(0, 2) }))
   const c: Cast = {
-    hash, text, timestamp: new Date().toISOString(), author: users.get(account!.fid!) || { fid: account!.fid!, username: account!.username },
+    hash, text, timestamp: new Date().toISOString(), author: myUser()!,
     parent_hash: o.parent?.hash ?? null, parent_url: o.channel ?? null, parent_author: { fid: o.parent?.fid ?? null },
     embeds: embeds.slice(0, 2).map((e) => (typeof e === 'string' ? { url: e } : { cast_id: e })),
     reactions: { likes_count: 0, recasts_count: 0 }, replies: { count: 0 },

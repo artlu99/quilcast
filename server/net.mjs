@@ -104,3 +104,28 @@ export function imageInfo(b) {
   }
   return null
 }
+
+/** JSON from a URL we trust (the node), or null on a non-2xx; gives up after `ms`. */
+export const fetchJson = (url, ms = 5000) => fetch(url, { signal: AbortSignal.timeout(ms) }).then((r) => (r.ok ? r.json() : null))
+
+/** Run at most `n` of these at once; callers past a queue of `wait` get a 503. */
+export function gate(n, wait = 30) {
+  let busy = 0
+  const queue = []
+  return async (fn) => {
+    if (busy >= n) {
+      if (queue.length >= wait) throw Object.assign(new Error('busy'), { status: 503 })
+      await new Promise((r) => queue.push(r))
+    }
+    busy++
+    try {
+      return await fn()
+    } finally {
+      busy--
+      queue.shift()?.()
+    }
+  }
+}
+
+/** Put `v` (a value or a promise) in a cache of at most `max` entries, oldest out first; a rejected promise drops out, so it's retried. */
+export const keep = (map, max, k, v) => (map.size >= max && map.delete(map.keys().next().value), map.set(k, v), Promise.resolve(v).catch(() => map.delete(k)), v)

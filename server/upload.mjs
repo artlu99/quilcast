@@ -12,7 +12,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, statfs, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
-import { imageInfo } from './net.mjs'
+import { fetchJson, gate, imageInfo } from './net.mjs'
 
 const FC = process.env.FC_URL || 'https://client.farcaster.xyz'
 const FC_HEADERS = { origin: 'https://farcaster.xyz', referer: 'https://farcaster.xyz/', accept: 'application/json' }
@@ -114,14 +114,8 @@ setInterval(() => {
   for (const [once, at] of spent) now - at > 1800e3 && spent.delete(once)
 }, 60e3).unref()
 
-// at most two files are read into memory and sent on at a time
-let sending = 0
-const queue = []
-const slot = async () => {
-  if (sending >= 2) await new Promise((r) => queue.push(r))
-  sending++
-}
-const release = () => (sending--, queue.shift()?.())
+// at most two files are read into memory and sent on at a time (the rest wait their turn)
+const sends = gate(2, MAX_ACTIVE)
 
 /** Who signed the farcaster.xyz login request on `req` (it must be `fid`'s custody address). Each signature works once. */
 async function signedBy(req, fid, node) {
@@ -140,7 +134,7 @@ async function signedBy(req, fid, node) {
   } catch {
     throw fail(401, 'bad signature')
   }
-  const user = await fetch(`${node}/v2/farcaster/user?fid=${fid}`, { signal: AbortSignal.timeout(8000) }).then((r) => (r.ok ? r.json() : null))
+  const user = await fetchJson(`${node}/v2/farcaster/user?fid=${fid}`, 8000)
   if (!user?.user?.custody_address || user.user.custody_address.toLowerCase() !== signer) throw fail(401, 'signature does not match this account')
   // keyed on what was signed, not the signature bytes, which can be re-encoded (high s) into a new valid one
   const once = `${signer}:${timestamp}`
@@ -239,26 +233,21 @@ export async function done(req, id, { site, node }) {
   // a second /done may have started while we were signing in
   if (jobs.get(id) !== job || job.state !== 'receiving') throw fail(409, 'upload already finishing')
   job.state = 'sending'
-  ;(async () => {
-    await slot()
-    try {
-      const body = await readFile(job.file)
-      if (!looksLike(job.type, body)) throw fail(415, "That file doesn't look like the image or video it claims to be.")
-      if (job.cdn) job.url = await toCdn(job, body, token)
-      else {
-        if (used(job.fid) + body.length > DAILY_LOCAL_PER_FID || mediaBytes + body.length > MEDIA_CAP) throw fail(429, 'Upload limit reached for today.')
-        const name = `${createHash('sha256').update(body).digest('hex').slice(0, 24)}.${EXT[job.type]}`
-        await mkdir(MEDIA, { recursive: true })
-        await rename(job.file, join(MEDIA, name))
-        quota.set(job.fid, { day: today(), bytes: used(job.fid) + body.length })
-        mediaBytes += body.length
-        job.url = `${site}/m/${name}`
-      }
-      job.state = 'ready'
-    } finally {
-      release()
+  sends(async () => {
+    const body = await readFile(job.file)
+    if (!looksLike(job.type, body)) throw fail(415, "That file doesn't look like the image or video it claims to be.")
+    if (job.cdn) job.url = await toCdn(job, body, token)
+    else {
+      if (used(job.fid) + body.length > DAILY_LOCAL_PER_FID || mediaBytes + body.length > MEDIA_CAP) throw fail(429, 'Upload limit reached for today.')
+      const name = `${createHash('sha256').update(body).digest('hex').slice(0, 24)}.${EXT[job.type]}`
+      await mkdir(MEDIA, { recursive: true })
+      await rename(job.file, join(MEDIA, name))
+      quota.set(job.fid, { day: today(), bytes: used(job.fid) + body.length })
+      mediaBytes += body.length
+      job.url = `${site}/m/${name}`
     }
-  })()
+    job.state = 'ready'
+  })
     .catch((e) => {
       if (!e.status) console.error('upload', id, e)
       job.state = 'failed'

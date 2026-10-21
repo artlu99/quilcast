@@ -1,5 +1,7 @@
+import type { ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { account, castText, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
+import { account, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
+import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from './shared.ts'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -32,6 +34,8 @@ export const P = {
   play: 'M7 4v16l13-8z',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
   bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0',
+  plus: 'M12 5v14M5 12h14',
+  check: 'M20 6 9 17l-5-5',
 }
 export const Icon = ({ d, fill, size = 18 }: { d: string; fill?: boolean; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill={fill ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -41,7 +45,7 @@ export const Icon = ({ d, fill, size = 18 }: { d: string; fill?: boolean; size?:
 export const Logo = ({ size = 28 }: { size?: number }) => (
   <svg viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
     <rect width="32" height="32" rx="9" fill="var(--accent)" />
-    <path d="M23.5 6.5c-6 .5-10.5 4.8-12 11.5l-1.6 7.5 1.4.4 2-5.2c4.6-.4 8.4-3.4 9.6-8.2-1.3.6-2.7.9-4 .9 1.9-1.2 3.6-3.6 4.6-6.9z" fill="#fff" />
+    <path d={LOGO} fill="#fff" />
   </svg>
 )
 
@@ -53,39 +57,57 @@ export const ago = (t: string) => {
   if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: s > 300 * 86400 ? 'numeric' : undefined })
 }
-export const n = (x = 0) => (x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e4 ? Math.round(x / 1e3) + 'K' : x >= 1e3 ? (x / 1e3).toFixed(1) + 'K' : String(x))
-export const handle = (u: User) => (u.username && !u.username.startsWith('fid:') ? u.username : `!${u.fid}`)
-export const userPath = (u: User) => `/u/${u.username && !u.username.startsWith('fid:') ? u.username : u.fid}`
+// accounts without a username show as !fid
+const uname = (u: User) => (u.username && !u.username.startsWith('fid:') ? u.username : undefined)
+export const handle = (u: User) => uname(u) || `!${u.fid}`
+export const nameOf = (u: User) => u.display_name || handle(u)
+export const userPath = (u: User) => `/u/${uname(u) || u.fid}`
 export const channelOf = (u?: string | null) => u?.match(/(?:warpcast\.com|farcaster\.xyz)\/~\/channel\/([^/?#]+)/)?.[1]
 export const channelUrl = (id: string) => `https://warpcast.com/~/channel/${id}`
-const stop = (e: Event) => e.stopPropagation()
+export const stop = (e: Event) => e.stopPropagation()
+
+/** Someone else's image: lazy, sent without a referrer, and hidden rather than broken when it fails. */
+export const Img = (p: { src?: string; class?: string }) => (
+  <img alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => (e.currentTarget.style.display = 'none')} {...p} />
+)
+
+/** A popup that closes on any click outside it. */
+export function Menu({ close, class: cls, children }: { close: () => void; class?: string; children: ComponentChildren }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // capturing, so clicks that other handlers stop still count
+    const f = (e: Event) => !ref.current?.contains(e.target as Node) && close()
+    addEventListener('click', f, true)
+    return () => removeEventListener('click', f, true)
+  }, [])
+  return <div ref={ref} class={`menu ${cls || ''}`} role="menu">{children}</div>
+}
 
 export const Avatar = ({ u, size = 40, link = true }: { u: User; size?: number; link?: boolean }) => {
   const style = { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.42)}px` }
   const pfp = safeUrl(u.pfp_url)
-  const inner = pfp ? <img src={pfp} alt="" loading="lazy" referrerpolicy="no-referrer" /> : <span>{[...(u.display_name || u.username || '?')][0]}</span>
-  return link ? <a class="avatar" href={userPath(u)} style={style} onClick={stop} aria-label={u.display_name || u.username}>{inner}</a> : <span class="avatar" style={style}>{inner}</span>
+  const inner = pfp ? <Img src={sized(pfp, 'anim=false,w=144')} /> : <span>{[...(u.display_name || u.username || '?')][0]}</span>
+  return link ? <a class="avatar" href={userPath(u)} style={style} onClick={stop} aria-label={nameOf(u)}>{inner}</a> : <span class="avatar" style={style}>{inner}</span>
 }
 
 // links, @mentions and /channels inside cast text
+const TOKENS = new RegExp(`(${LINK_RE.source}|(?<![\\w/])@[a-z0-9][a-z0-9.-]*[a-z0-9]|(?<![\\w/:])\\/[a-z0-9-]{2,}(?![\\w/]))`, 'gi')
+const shortUrl = (s: string) => ((s = s.replace(/^https?:\/\/(www\.)?/, '')), s.length > 40 ? s.slice(0, 40) + '…' : s)
 export function RichText({ text, class: cls = 'text' }: { text: string; class?: string }) {
-  const parts = text.split(new RegExp(`(${LINK_RE.source}|(?<![\\w/])@[a-z0-9][a-z0-9.-]*[a-z0-9]|(?<![\\w/:])\\/[a-z0-9-]{2,}(?![\\w/]))`, 'gi'))
   return (
     <p class={cls}>
-      {parts.map((p, i) =>
-        i % 2 === 0 ? p
-          : p[0] === '@' ? <a key={i} href={`/u/${p.slice(1)}`} onClick={stop}>{p}</a>
-            : p[0] === '/' ? <span key={i} class="chan-ref">{p}</span>
-              : !safeUrl(toUrl(p)) ? p
-                : <a key={i} href={safeUrl(toUrl(p))} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}{p.replace(/^https?:\/\/(www\.)?/, '').length > 40 ? '…' : ''}</a>,
-      )}
+      {text.split(TOKENS).map((p, i) => {
+        if (i % 2 === 0) return p
+        if (p[0] === '@') return <a href={`/u/${p.slice(1)}`} onClick={stop}>{p}</a>
+        if (p[0] === '/') return <span class="chan-ref">{p}</span>
+        const u = safeUrl(toUrl(p))
+        return u ? <a href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>{shortUrl(p)}</a> : p
+      })}
     </p>
   )
 }
 
-export const isImg = (u: string) => /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(u) || /imagedelivery\.net|i\.imgur\.com/.test(u)
-export const isVid = (u: string) => /\.(m3u8|mp4|webm|mov)(\?|$)/i.test(u)
-
+const urlsOf = (c: Cast) => c.embeds.flatMap((e) => safeUrl(e.url) ?? [])
 // Farcaster's streams get a first-frame poster from our server
 const poster = (src?: string) => (src && /^https:\/\/stream\.farcaster\.xyz\//.test(src) ? `/api/poster?url=${encodeURIComponent(src)}` : undefined)
 
@@ -112,8 +134,9 @@ export function Video({ src }: { src: string }) {
   )
 }
 
+/** Images (up to four in a grid, opening the viewer) and videos from a list of URLs. */
 export function Media({ urls: given }: { urls: string[] }) {
-  const urls = given.map(safeUrl).filter((u): u is string => !!u)
+  const urls = given.flatMap((u) => safeUrl(u) ?? [])
   const imgs = urls.filter(isImg)
   const shown = imgs.slice(0, 4)
   return (
@@ -122,7 +145,7 @@ export function Media({ urls: given }: { urls: string[] }) {
         <div class={`imgs n${shown.length}`} onClick={stop}>
           {shown.map((u, i) => (
             <button class="img" aria-label={`Open image ${i + 1} of ${imgs.length}`} onClick={() => shell.view(imgs, i)}>
-              <img src={u} alt="" loading="lazy" referrerpolicy="no-referrer" />
+              <Img src={sized(u, 'w=1200')} />
               {i === 3 && imgs.length > 4 && <span class="more-imgs">+{imgs.length - 4}</span>}
             </button>
           ))}
@@ -145,6 +168,7 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
     document.body.style.overflow = 'hidden'
     return () => (removeEventListener('keydown', key), (document.body.style.overflow = ''))
   }, [])
+  const src = safeUrl(urls[i])
   return (
     <div class="lightbox" role="dialog" aria-label="Image viewer" onClick={close}
       onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
@@ -152,7 +176,7 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
         const dx = e.changedTouches[0].clientX - touch.current
         Math.abs(dx) > 50 && step(dx < 0 ? 1 : -1)
       }}>
-      <img src={safeUrl(urls[i])} alt="" referrerpolicy="no-referrer" onClick={stop} />
+      <img src={src} alt="" referrerpolicy="no-referrer" onClick={stop} />
       <button class="lb-btn lb-close" aria-label="Close" onClick={close}><Icon d={P.x} size={22} /></button>
       {many && (
         <>
@@ -161,27 +185,27 @@ export function Lightbox({ urls, index, close }: { urls: string[]; index: number
           <span class="lb-count">{i + 1} / {urls.length}</span>
         </>
       )}
-      {safeUrl(urls[i]) && <a class="lb-open" href={safeUrl(urls[i])} target="_blank" rel="noopener noreferrer" onClick={stop}>Open original</a>}
+      {src && <a class="lb-open" href={src} target="_blank" rel="noopener noreferrer" onClick={stop}>Open original</a>}
     </div>
   )
 }
 
 type Tweet = { text: string; author: { name?: string; handle?: string; avatar?: string }; at?: number; photos: string[]; video?: string; likes?: number; replies?: number; reposts?: number; quote?: { name?: string; handle?: string; text?: string } }
-type Unfurl = { url: string; title?: string; description?: string; site?: string; image?: string; button?: string; icon?: string; tweet?: Tweet } | null
+type Unfurl = { url: string; title?: string; description?: string; image?: string; button?: string; icon?: string; tweet?: Tweet } | null
 
-const X_LOGO = 'M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.19L2 3h6.33l4.37 5.77zm-1.08 16.17h1.7L7.4 4.74H5.58z'
 function TweetCard({ u, t }: { u: string; t: Tweet }) {
+  const video = safeUrl(t.video)
   return (
-    <div class="tweet" onClick={(e) => (stop(e), safeUrl(u) && open(safeUrl(u), '_blank', 'noopener,noreferrer'))} role="link" tabIndex={0}>
+    <div class="tweet" onClick={(e) => (stop(e), open(u, '_blank', 'noopener,noreferrer'))} role="link" tabIndex={0}>
       <div class="tw-head">
-        {safeUrl(t.author.avatar) && <img class="tw-av" src={safeUrl(t.author.avatar)} alt="" loading="lazy" referrerpolicy="no-referrer" />}
+        {safeUrl(t.author.avatar) && <Img class="tw-av" src={safeUrl(t.author.avatar)} />}
         <b>{t.author.name}</b><span class="handle">@{t.author.handle}</span>
         {t.at && <span class="handle">· {ago(new Date(t.at * 1000).toISOString())}</span>}
         <svg class="tw-x" viewBox="0 0 24 24" width="16" height="16" aria-label="X"><path d={X_LOGO} fill="currentColor" /></svg>
       </div>
       {t.text && <RichText text={t.text.replace(/\s*https:\/\/t\.co\/\S+$/, '')} class="text tw-text" />}
       {t.photos.length > 0 && <Media urls={t.photos} />}
-      {!t.photos.length && safeUrl(t.video) && <div class="tw-video"><img src={safeUrl(t.video)} alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="play"><Icon d={P.play} fill size={24} /></span></div>}
+      {!t.photos.length && video && <div class="tw-video"><Img src={video} /><span class="play"><Icon d={P.play} fill size={24} /></span></div>}
       {t.quote && <div class="tw-quote"><b>{t.quote.name}</b> <span class="handle">@{t.quote.handle}</span><p>{t.quote.text}</p></div>}
       <div class="tw-stats"><span>{n(t.replies)} replies</span><span>{n(t.reposts)} reposts</span><span>{n(t.likes)} likes</span></div>
     </div>
@@ -196,26 +220,22 @@ const unfurl = (u: string) => {
 // Open Graph preview, fetched through our server; a plain domain row until (or unless) it arrives
 export function LinkCard({ u: given }: { u: string }) {
   const u = safeUrl(given)
-  const [d, setD] = useState<Unfurl | undefined>(undefined)
+  const [d, setD] = useState<Unfurl>()
   useEffect(() => void (u && unfurl(u).then(setD)), [u])
   if (!u) return null
-  const host = new URL(u).hostname.replace(/^www\./, '')
-  const image = safeUrl(d?.image)
-  const icon = safeUrl(d?.icon)
   if (d?.tweet) return <TweetCard u={u} t={d.tweet} />
+  const image = safeUrl(d?.image)
   // a link straight to an image renders as the image
   if (image && d?.image === d?.url) return <Media urls={[image]} />
-  const meta = (
-    <span class="lc-text">
-      <span class="lc-site">{icon && <img src={icon} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}{host}</span>
-      {d?.title && <b class="lc-title">{d.title}</b>}
-      {d?.description && <span class="lc-desc">{d.description}</span>}
-    </span>
-  )
+  const icon = safeUrl(d?.icon)
   return (
     <a class={`linkcard${image ? ' big' : ''}`} href={u} target="_blank" rel="noopener noreferrer nofollow" onClick={stop}>
-      {image && <img class="lc-img" src={image} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
-      {meta}
+      {image && <Img class="lc-img" src={sized(image, 'w=1200')} />}
+      <span class="lc-text">
+        <span class="lc-site">{icon && <Img src={icon} />}{new URL(u).hostname.replace(/^www\./, '')}</span>
+        {d?.title && <b class="lc-title">{d.title}</b>}
+        {d?.description && <span class="lc-desc">{d.description}</span>}
+      </span>
       {d?.button && <span class="lc-btn">{d.button}</span>}
     </a>
   )
@@ -233,48 +253,34 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
   useEffect(() => void (hash && !given && fetchCast(hash).then(setC)), [hash])
   if (c === null) return <div class="quote muted">This cast is unavailable.</div>
   if (!c) return <div class="quote skeleton" />
-  const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
+  const urls = urlsOf(c)
   const img = urls.find(isImg) || poster(urls.find(isVid))
   const text = castText(c).trim()
   return (
     <a class="quote" href={`/c/${c.hash}`} onClick={stop}>
-      <div class="meta"><Avatar u={c.author} size={18} link={false} /><b>{c.author.display_name || handle(c.author)}</b><span>@{handle(c.author)} · {ago(c.timestamp)}</span></div>
+      <div class="meta"><Avatar u={c.author} size={18} link={false} /><b>{nameOf(c.author)}</b><span>@{handle(c.author)} · {ago(c.timestamp)}</span></div>
       {/* text gets a thumbnail beside it; a cast that is only media shows it at size */}
       <div class={`qbody${text ? '' : ' bare'}`}>
         {text && <RichText text={text} class="text clamp" />}
-        {img && <img class="qimg" src={img} alt="" loading="lazy" referrerpolicy="no-referrer" onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />}
+        {img && <Img class="qimg" src={sized(img, text ? 'w=240' : 'w=1200')} />}
       </div>
     </a>
   )
 }
 
 function Embeds({ c }: { c: Cast }) {
-  const urls = c.embeds.map((e) => safeUrl(e.url)).filter((u): u is string => !!u)
+  const urls = urlsOf(c)
   const links = urls.filter((u) => !isImg(u) && !isVid(u))
-  const quotes = c.embeds.filter((e) => /^(0x)?[0-9a-f]{40}$/i.test(e.cast_id?.hash || ''))
+  const quotes = c.embeds.flatMap((e) => (/^(0x)?[0-9a-f]{40}$/i.test(e.cast_id?.hash || '') ? [e.cast_id!.hash] : []))
   const all = (
     <>
       <Media urls={urls} />
       {links.map((u) => <LinkCard u={u} />)}
-      {quotes.map((e) => <QuoteCard hash={e.cast_id!.hash} />)}
+      {quotes.map((h) => <QuoteCard hash={h} />)}
     </>
   )
   // several embeds (the images count as one) sit side by side and scroll, instead of stacking into a tall cast
   return +urls.some(isImg) + urls.filter(isVid).length + links.length + quotes.length > 1 ? <div class="strip">{all}</div> : all
-}
-
-function RecastMenu({ c, on, toggle, close }: { c: Cast; on: boolean; toggle: () => void; close: () => void }) {
-  useEffect(() => {
-    const f = () => close()
-    setTimeout(() => addEventListener('click', f), 0)
-    return () => removeEventListener('click', f)
-  }, [])
-  return (
-    <div class="menu" role="menu">
-      <button role="menuitem" onClick={() => (close(), toggle())}><Icon d={P.recast} />{on ? 'Undo recast' : 'Recast'}</button>
-      <button role="menuitem" onClick={() => (close(), requireAccount() && shell.compose({ quote: c }))}><Icon d={P.quote} />Quote</button>
-    </div>
-  )
 }
 
 /** A cast row. `focus` is the thread's main cast; `line` draws the thread connector down to the next row. */
@@ -308,7 +314,12 @@ export function CastCard({ c, focus, line, inThread, quotes = 0 }: { c: Cast; fo
       <button class="act" aria-label="Reply" onClick={() => requireAccount() && shell.compose({ parent: c })}><Icon d={P.reply} /><span>{c.replies.count ? n(c.replies.count) : ''}</span></button>
       <span class="wrap-menu">
         <button class={`act rc${recast ? ' on' : ''}`} aria-label="Recast or quote" aria-haspopup="menu" onClick={() => setMenu(!menu)}><Icon d={P.recast} /><span>{recasts ? n(recasts) : ''}</span></button>
-        {menu && <RecastMenu c={c} on={recast} toggle={() => toggle(2, !recast, setRecast, mine.recasts)} close={() => setMenu(false)} />}
+        {menu && (
+          <Menu close={() => setMenu(false)}>
+            <button role="menuitem" onClick={() => (setMenu(false), toggle(2, !recast, setRecast, mine.recasts))}><Icon d={P.recast} />{recast ? 'Undo recast' : 'Recast'}</button>
+            <button role="menuitem" onClick={() => (setMenu(false), requireAccount() && shell.compose({ quote: c }))}><Icon d={P.quote} />Quote</button>
+          </Menu>
+        )}
       </span>
       <button class={`act lk${liked ? ' on' : ''}`} aria-label="Like" onClick={() => toggle(1, !liked, setLiked, mine.likes)}><Icon d={P.like} fill={liked} /><span>{likes ? n(likes) : ''}</span></button>
       <button class="act" aria-label="Share" onClick={share}><Icon d={P.share} /></button>
@@ -317,27 +328,23 @@ export function CastCard({ c, focus, line, inThread, quotes = 0 }: { c: Cast; fo
   )
   const name = (
     <>
-      <a class="name" href={userPath(c.author)} onClick={stop}>{c.author.display_name || handle(c.author)}</a>
+      <a class="name" href={userPath(c.author)} onClick={stop}>{nameOf(c.author)}</a>
       <span class="handle">@{handle(c.author)}</span>
     </>
   )
-  if (focus)
+  if (focus) {
+    const stats = ([['recasts', recasts, 'recast'], ['quotes', quotes, 'quote'], ['likes', likes, 'like']] as const).filter(([, x]) => x > 0)
     return (
       <article class="cast focus">
         <header><Avatar u={c.author} size={44} /><div class="who">{name}</div>{ch && <span class="chan">/{ch}</span>}</header>
         <RichText text={castText(c)} />
         <Embeds c={c} />
         <div class="when">{sending ? <span class="posting"><span class="pulse" /> Posting…</span> : new Date(c.timestamp).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' })}</div>
-        {(recasts > 0 || quotes > 0 || likes > 0) && (
-          <div class="stats">
-            {recasts > 0 && <a href={`/c/${c.hash}/recasts`}><b>{n(recasts)}</b> {recasts === 1 ? 'recast' : 'recasts'}</a>}
-            {quotes > 0 && <a href={`/c/${c.hash}/quotes`}><b>{n(quotes)}</b> {quotes === 1 ? 'quote' : 'quotes'}</a>}
-            {likes > 0 && <a href={`/c/${c.hash}/likes`}><b>{n(likes)}</b> {likes === 1 ? 'like' : 'likes'}</a>}
-          </div>
-        )}
+        {stats.length > 0 && <div class="stats">{stats.map(([k, x, one]) => <a href={`/c/${c.hash}/${k}`}><b>{n(x)}</b> {x === 1 ? one : k}</a>)}</div>}
         {actions}
       </article>
     )
+  }
   return (
     <article class={`cast${line ? ' line' : ''}`} onClick={() => go(`/c/${c.hash}`)}>
       <div class="rail"><Avatar u={c.author} /></div>
@@ -361,7 +368,7 @@ export const UserRow = ({ u }: { u: User }) => (
   <a class="row" href={userPath(u)}>
     <Avatar u={u} link={false} />
     <span class="row-main">
-      <span class="row-top"><b>{u.display_name || handle(u)}</b><span class="handle">@{handle(u)}</span></span>
+      <span class="row-top"><b>{nameOf(u)}</b><span class="handle">@{handle(u)}</span></span>
       {u.profile?.bio?.text && <span class="row-sub">{u.profile.bio.text}</span>}
     </span>
     <span class="row-meta">{n(u.follower_count)}<small>followers</small></span>

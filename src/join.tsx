@@ -1,7 +1,7 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, fidForAddress, get, go, setAccount, settings, USER_DATA, type Account } from './api.ts'
+import { account, get, getUser, go, setAccount, settings, USER_DATA, type Account } from './api.ts'
 import { balance, fidOf, register, registerPrice } from './eth.ts'
 import { address, fnameProof } from './fc.ts'
 import { custodyKey, custodyOf, ensureSigner, setUserData } from './write.ts'
@@ -12,8 +12,8 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,15}$/
 
 // likes and recasts load in the background once the account is set; the feed doesn't wait for them
 const finish = async (a: Account) => {
-  const u = await get('/v2/farcaster/user', { fid: a.fid }).catch(() => null)
-  setAccount({ ...account!, username: a.username || u?.user?.username, done: true })
+  const u = await getUser(a.fid!).catch(() => null)
+  setAccount({ ...account!, username: a.username || u?.username, done: true })
   go('/')
 }
 
@@ -77,77 +77,87 @@ function Create({ wallet }: { wallet?: string }) {
 
 const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`
 
-const WALLET_IN = ['Connecting your wallet', 'Finding your Farcaster account', 'Two signatures in your wallet add a signing key for this browser', 'Loading your profile']
-function WalletIn() {
+/** The FID whose custody address this is: Hypersnap first (fast), Optimism when the node doesn't know it.
+ *  A wrong FID can't sign in anyway: the network only takes a key signed by that FID's custody address. */
+async function fidFor(addr: string) {
+  const u = (await get('/v2/farcaster/user/custody-address', { custody_address: addr }).catch(() => null))?.user
+  return typeof u?.fid === 'number' && u.fid > 0 && String(u.custody_address).toLowerCase() === addr.toLowerCase() ? u.fid : fidOf(settings.rpc, addr)
+}
+
+// the account exists: add a signing key for this browser, then load the profile
+async function enter(a: Account, step: (i: number) => void) {
+  step(2)
+  await ensureSigner(a)
+  step(3)
+  await finish(a)
+}
+
+/** A sign-in in steps: `step(i)` marks progress, a throw shows its message, `at` is -1 when idle. */
+function useFlow() {
   const [err, setErr] = useState('')
   const [at, setAt] = useState(-1)
-  const [none, setNone] = useState('')
-  const go = async () => {
+  const run = (f: (step: (i: number) => void) => Promise<unknown>) => async () => {
     setErr('')
     try {
-      setAt(0)
-      const addr = await (await import('./wallet.ts')).connect()
-      setAt(1)
-      const fid = await fidForAddress(addr, () => fidOf(settings.rpc, addr))
-      if (!fid) return setAt(-1), setNone(addr)
-      setAt(2)
-      const a = { phrase: '', wallet: addr, fid, done: true }
-      await ensureSigner(a)
-      setAt(3)
-      await finish(a)
+      await f(setAt)
     } catch (e: any) {
       setErr(e.message)
-      setAt(-1)
     }
+    setAt(-1)
   }
+  return { err, at, busy: at >= 0, run }
+}
+const Progress = ({ err, at, steps }: { err: string; at: number; steps: string[] }) => (
+  <>
+    {err && <p class="warn">{err}</p>}
+    {at >= 0 && <section class="card"><Steps steps={steps} at={at} /></section>}
+  </>
+)
+
+const WALLET_IN = ['Connecting your wallet', 'Finding your Farcaster account', 'Two signatures in your wallet add a signing key for this browser', 'Loading your profile']
+function WalletIn() {
+  const f = useFlow()
+  const [none, setNone] = useState('')
   // a wallet without a Farcaster account can register one
   if (none) return <Create wallet={none} />
-  const busy = at >= 0
+  const connect = f.run(async (step) => {
+    step(0)
+    const addr = await (await import('./wallet.ts')).connect()
+    step(1)
+    const fid = await fidFor(addr)
+    fid ? await enter({ phrase: '', wallet: addr, fid, done: true }, step) : setNone(addr)
+  })
   return (
     <div class="join">
       <h1>Use a wallet</h1>
       <p class="lede">Connect the wallet that owns your Farcaster account. Quilcast never sees its keys: the wallet approves a signing key for this browser, and later asks again only to renew that key, claim a username or sign uploads.</p>
-      {err && <p class="warn">{err}</p>}
-      {busy && <section class="card"><Steps steps={WALLET_IN} at={at} /></section>}
-      <button class="btn wide" disabled={busy} onClick={go}>{busy ? 'Check your wallet…' : 'Connect wallet'}</button>
+      <Progress {...f} steps={WALLET_IN} />
+      <button class="btn wide" disabled={f.busy} onClick={connect}>{f.busy ? 'Check your wallet…' : 'Connect wallet'}</button>
     </div>
   )
 }
 
 const SIGN_IN = ['Reading your recovery phrase', 'Finding your Farcaster account', 'Adding a signing key for this browser', 'Loading your profile']
 function SignIn() {
+  const f = useFlow()
   const [phrase, setPhrase] = useState('')
-  const [err, setErr] = useState('')
-  const [at, setAt] = useState(-1)
-  const go = async () => {
+  const signIn = f.run(async (step) => {
     const p = phrase.trim().toLowerCase().split(/\s+/).join(' ')
-    if (!validateMnemonic(p, wordlist)) return setErr("That doesn't look like a valid recovery phrase. Check the words and their order.")
-    setErr('')
-    try {
-      setAt(0)
-      const addr = address(await custodyKey(p))
-      setAt(1)
-      const fid = await fidForAddress(addr, () => fidOf(settings.rpc, addr))
-      if (!fid) throw new Error('No Farcaster account belongs to this phrase.')
-      setAt(2)
-      const a = { phrase: p, fid, done: true }
-      await ensureSigner(a)
-      setAt(3)
-      await finish(a)
-    } catch (e: any) {
-      setErr(e.message)
-      setAt(-1)
-    }
-  }
-  const busy = at >= 0
+    if (!validateMnemonic(p, wordlist)) throw new Error("That doesn't look like a valid recovery phrase. Check the words and their order.")
+    step(0)
+    const addr = address(await custodyKey(p))
+    step(1)
+    const fid = await fidFor(addr)
+    if (!fid) throw new Error('No Farcaster account belongs to this phrase.')
+    await enter({ phrase: p, fid, done: true }, step)
+  })
   return (
     <div class="join">
       <h1>Sign in</h1>
       <p class="lede">Enter the 12 or 24 word recovery phrase of your Farcaster account. Quilcast keeps it in this browser and uses it to add a signing key for this device.</p>
-      <textarea rows={4} value={phrase} disabled={busy} onInput={(e) => setPhrase(e.currentTarget.value)} placeholder="apple banana cherry …" autocapitalize="none" spellcheck={false} />
-      {err && <p class="warn">{err}</p>}
-      {busy && <section class="card"><Steps steps={SIGN_IN} at={at} /></section>}
-      <button class="btn wide" disabled={busy || !phrase.trim()} onClick={go}>{busy ? 'Signing in…' : 'Sign in'}</button>
+      <textarea rows={4} value={phrase} disabled={f.busy} onInput={(e) => setPhrase(e.currentTarget.value)} placeholder="apple banana cherry …" autocapitalize="none" spellcheck={false} />
+      <Progress {...f} steps={SIGN_IN} />
+      <button class="btn wide" disabled={f.busy || !phrase.trim()} onClick={signIn}>{f.busy ? 'Signing in…' : 'Sign in'}</button>
     </div>
   )
 }
@@ -209,9 +219,9 @@ function Setup() {
           const acc = account!
           // a wallet asks its owner for each signature, so ask only once the node knows the new FID
           if (acc.wallet)
-            while (live && !(await get('/v2/farcaster/user', { fid: acc.fid }).then((r) => String(r.user?.custody_address).toLowerCase() === acc.wallet, () => false))) await sleep(3000)
+            while (live && !(await getUser(acc.fid!).then((u) => String(u.custody_address).toLowerCase() === acc.wallet, () => false))) await sleep(3000)
           if (!acc.signer) await ensureSigner(acc)
-          if (acc.username && !(await get('/v2/farcaster/user', { fid: acc.fid }).then((r) => r.user.username === acc.username, () => false))) {
+          if (acc.username && !(await getUser(acc.fid!).then((u) => u.username === acc.username, () => false))) {
             const proof = await fetch(`https://fnames.farcaster.xyz/transfers/current?name=${acc.username}`).then((r) => r.json())
             if (!proof.transfer || proof.transfer.to !== acc.fid) {
               const timestamp = Math.floor(Date.now() / 1000)

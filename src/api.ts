@@ -1,38 +1,31 @@
 // Hypersnap reads plus the locally stored account. Writes live in write.ts,
 // loaded on demand so readers never download the crypto.
 
-const load = <T,>(k: string, d: T): T => {
+export const read = <T,>(k: string, d: T): T => {
   try {
-    return { ...d, ...JSON.parse(localStorage.getItem(k) || '{}') }
+    return JSON.parse(localStorage.getItem(k)!) ?? d
   } catch {
     return d
   }
 }
-const save = (k: string, v: unknown) => localStorage.setItem(k, JSON.stringify(v))
+export const save = (k: string, v: unknown) => localStorage.setItem(k, JSON.stringify(v))
 
-export const settings = load('quilcast:settings', { node: 'https://haatz.quilibrium.com', rpc: 'https://mainnet.optimism.io', theme: 'system' })
+export const settings = { node: 'https://haatz.quilibrium.com', rpc: 'https://mainnet.optimism.io', theme: 'system', ...read('quilcast:settings', {}) }
 export const saveSettings = () => save('quilcast:settings', settings)
 
 // a phrase account keeps its recovery phrase; a wallet account has phrase '' and signs with `wallet` (its custody address)
 export type Account = { phrase: string; wallet?: string; fid?: number; username?: string; display?: string; signer?: string; signerAt?: number; nonce?: number; scopes?: number; done?: boolean }
-const list = (k: string): Account[] => {
-  try {
-    return JSON.parse(localStorage.getItem(k) || '[]')
-  } catch {
-    return []
-  }
-}
 // every account this browser holds; `account` is the selected one, keyed by its wallet or its phrase
 export const idOf = (a: Account) => a.wallet || a.phrase
-export let accounts = list('quilcast:accounts')
-const legacy = localStorage.getItem('quilcast:account')
-if (legacy && !accounts.length) accounts = [load<Account>('quilcast:account', { phrase: '' })]
+export let accounts = read<Account[]>('quilcast:accounts', [])
+const legacy = read<Account | null>('quilcast:account', null)
+if (legacy && !accounts.length) accounts = [{ ...legacy, phrase: legacy.phrase || '' }]
 export let account: Account | null = accounts.find((a) => idOf(a) === localStorage.getItem('quilcast:current')) || accounts[0] || null
 
 /** Save `a` (added or updated, matched by idOf) and select it; `null` removes the selected account. */
 export const setAccount = (a: Account | null) => {
   // re-read first: another tab may have added or removed accounts since this one loaded
-  const fresh = list('quilcast:accounts')
+  const fresh = read<Account[]>('quilcast:accounts', [])
   if (fresh.length || !legacy) accounts = fresh
   if (a) {
     const i = accounts.findIndex((x) => idOf(x) === idOf(a))
@@ -47,7 +40,7 @@ export const setAccount = (a: Account | null) => {
 // another tab changed the accounts: take its list, and start over if it signed this account out
 addEventListener('storage', (e) => {
   if (e.key !== 'quilcast:accounts') return
-  accounts = list('quilcast:accounts')
+  accounts = read<Account[]>('quilcast:accounts', [])
   const mine = account && accounts.find((x) => idOf(x) === idOf(account!))
   if (account && !mine) return location.assign('/')
   account = mine || null
@@ -90,34 +83,33 @@ export async function get<T = any>(path: string, q: Record<string, string | numb
   return r.json()
 }
 
-export const fidByName = async (name: string) => (await get('/v2/farcaster/user/by-username', { username: name }).catch(() => null))?.user?.fid as number | undefined
-
 // what the signed-in user recently liked/recast, so buttons render filled; `mineVersion` bumps when it loads
 export const mine = { likes: new Set<string>(), recasts: new Set<string>() }
 export let mineVersion = 0
-const norm = (h: string) => h.replace(/^0x/, '').toLowerCase()
 export async function loadMine() {
   const fid = account?.fid
   if (!fid) return
   await Promise.all(
     ([['Like', mine.likes], ['Recast', mine.recasts]] as const).map(async ([type, set]) => {
       const r = await get('/v1/reactionsByFid', { fid, reaction_type: type, pageSize: 200, reverse: 'true' }).catch(() => ({ messages: [] }))
-      for (const m of r.messages) m.data?.reactionBody?.targetCastId && set.add(norm(m.data.reactionBody.targetCastId.hash))
+      for (const m of r.messages) m.data?.reactionBody?.targetCastId && set.add(m.data.reactionBody.targetCastId.hash.replace(/^0x/, '').toLowerCase())
     }),
   )
   mineVersion++
 }
 
-/** The FID whose custody address this is: Hypersnap first (fast), Optimism when the node doesn't know it.
- *  A wrong FID can't sign in anyway: the network only takes a key signed by that FID's custody address. */
-export async function fidForAddress(addr: string, rpcLookup: () => Promise<number>) {
-  const u = (await get('/v2/farcaster/user/custody-address', { custody_address: addr }).catch(() => null))?.user
-  return typeof u?.fid === 'number' && u.fid > 0 && String(u.custody_address).toLowerCase() === addr.toLowerCase() ? u.fid : rpcLookup()
-}
 export const isFollowing = async (target: number) =>
-  !!account?.fid && (await fetch(`${settings.node}/v1/linkById?fid=${account.fid}&target_fid=${target}&link_type=follow`)).ok
+  !!account?.fid && (await get('/v1/linkById', { fid: account.fid, target_fid: target, link_type: 'follow' }).then(() => true, () => false))
 
-export type User = { fid: number; username?: string; display_name?: string; pfp_url?: string; profile?: { bio?: { text?: string } }; follower_count?: number; following_count?: number }
+/** People matching `q`, best first: that exact handle, then handles starting with it, then the most followed. */
+export async function findUsers(q: string) {
+  q = q.replace(/^@/, '').toLowerCase()
+  const r = await get('/v2/farcaster/user/search', { q, limit: 50 })
+  const rank = (u: User) => (u.username === q || u.username === q + '.eth' ? 1e12 : u.username?.startsWith(q) ? 1e10 : 0) + (u.follower_count || 0)
+  return ((r.users || r.result?.users || []) as User[]).sort((a, b) => rank(b) - rank(a))
+}
+
+export type User = { fid: number; username?: string; display_name?: string; pfp_url?: string; profile?: { bio?: { text?: string } }; follower_count?: number; following_count?: number; custody_address?: string }
 export type Cast = {
   hash: string; text: string; timestamp: string; author: User; parent_hash?: string | null; parent_url?: string | null; parent_author?: { fid: number | null }
   embeds: { url?: string; cast_id?: { fid: number; hash: string } }[]
@@ -125,38 +117,25 @@ export type Cast = {
   mentioned_profiles?: User[]; mentioned_profiles_ranges?: { start: number; end: number }[]
 }
 
-/** Hypersnap leaves mentions out of `text` and gives UTF-8 byte offsets; put "@name" back in. */
-export function castText(c: Cast) {
-  const ranges = c.mentioned_profiles_ranges || []
-  if (!ranges.some((r) => r.start === r.end)) return c.text
-  let bytes = new TextEncoder().encode(c.text)
-  const enc = new TextEncoder()
-  // insert from the end so earlier offsets stay valid
-  ranges
-    .map((r, i) => ({ ...r, u: c.mentioned_profiles?.[i] }))
-    .filter((r) => r.start === r.end && r.u?.username)
-    .sort((a, b) => b.start - a.start)
-    .forEach((r) => {
-      const ins = enc.encode('@' + r.u!.username)
-      const out = new Uint8Array(bytes.length + ins.length)
-      out.set(bytes.subarray(0, r.start))
-      out.set(ins, r.start)
-      out.set(bytes.subarray(r.start), r.start + ins.length)
-      bytes = out
-    })
-  return new TextDecoder().decode(bytes)
-}
-
 // authors we've seen, so replies can say who they reply to
 export const users = new Map<number, User>()
-/** Casts this tab just sent, shown as "Posting…" until the node has indexed them. */
-export const posting = new Map<string, Cast>()
+/** Look up the users we haven't seen yet. */
+export async function loadUsers(fids: (number | null | undefined)[]) {
+  const missing = [...new Set(fids.filter((f): f is number => !!f && !users.has(f)))]
+  if (missing.length) for (const u of (await get('/v2/farcaster/user/bulk', { fids: missing.slice(0, 100).join(',') }).catch(() => ({ users: [] }))).users) users.set(u.fid, u)
+}
 export async function hydrateParents(casts: Cast[]) {
   for (const c of casts) users.set(c.author.fid, c.author)
-  const missing = [...new Set(casts.map((c) => c.parent_author?.fid).filter((f): f is number => !!f && !users.has(f)))]
-  if (missing.length) {
-    const r = await get('/v2/farcaster/user/bulk', { fids: missing.slice(0, 100).join(',') }).catch(() => ({ users: [] }))
-    for (const u of r.users) users.set(u.fid, u)
-  }
+  await loadUsers(casts.map((c) => c.parent_author?.fid))
   return casts
 }
+/** A user fresh from the node (by FID, or by username for anything else); also remembered in `users`. */
+export async function getUser(id: number | string) {
+  const u: User = (await (/^\d+$/.test(String(id)) ? get('/v2/farcaster/user', { fid: id }) : get('/v2/farcaster/user/by-username', { username: id }))).user
+  users.set(u.fid, u)
+  return u
+}
+/** The signed-in user as far as we know them. */
+export const myUser = (): User | null => (account?.fid ? users.get(account.fid) || { fid: account.fid, username: account.username } : null)
+/** Casts this tab just sent, shown as "Posting…" until the node has indexed them. */
+export const posting = new Map<string, Cast>()

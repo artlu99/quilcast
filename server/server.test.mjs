@@ -48,6 +48,16 @@ test('malformed percent-encoding is a 400, not a crash', async () => {
   assert.equal(await (await fetch(base + '/health')).text(), 'ok')
 })
 
+test('text goes out compressed when the client takes it', async () => {
+  const js = (await (await fetch(base + '/')).text()).match(/\/assets\/index-[\w-]+\.js/)?.[0]
+  for (const path of ['/', js]) {
+    const r = await fetch(base + path, { headers: { 'accept-encoding': 'br' } })
+    assert.equal(r.headers.get('content-encoding'), 'br', path)
+    assert.ok((await r.text()).length > 1024, path)
+  }
+  assert.equal((await fetch(base + js, { headers: { 'accept-encoding': 'identity' } })).headers.get('content-encoding'), null)
+})
+
 test('security headers on every page', async () => {
   const r = await fetch(base + '/')
   assert.match(r.headers.get('content-security-policy'), /script-src 'self'/)

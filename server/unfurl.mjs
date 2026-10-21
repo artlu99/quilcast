@@ -1,7 +1,7 @@
 // GET /api/unfurl?url=…: Open Graph / mini app metadata for link previews, fetched through
 // safeGet (public hosts only). The page is scanned tag by tag in one pass, so hostile HTML
 // can't make the parser backtrack.
-import { safeGet, UA } from './net.mjs'
+import { keep, safeGet, UA } from './net.mjs'
 
 const cache = new Map()
 const clip = (s, n) => (typeof s === 'string' ? s.slice(0, n) : undefined)
@@ -86,10 +86,4 @@ async function tweet(url) {
 }
 
 export const cached = (url) => cache.has(url)
-export async function unfurl(url) {
-  if (!cache.has(url)) {
-    cache.size > 2000 && cache.delete(cache.keys().next().value)
-    cache.set(url, tweet(url).then((t) => (t === undefined ? read(url) : t)).catch(() => null))
-  }
-  return cache.get(url)
-}
+export const unfurl = (url) => cache.get(url) || keep(cache, 2000, url, tweet(url).then((t) => (t === undefined ? read(url) : t)).catch(() => null))

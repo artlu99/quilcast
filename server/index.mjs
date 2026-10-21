@@ -6,7 +6,10 @@ import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { extname, join, normalize } from 'node:path'
-import { imageInfo, safeGet } from './net.mjs'
+import { promisify } from 'node:util'
+import { brotliCompress, gzip } from 'node:zlib'
+import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from '../src/shared.ts'
+import { fetchJson, gate, imageInfo, keep, safeGet } from './net.mjs'
 import { cached, unfurl } from './unfurl.mjs'
 import { chunk, done, EXT, MEDIA, start, status } from './upload.mjs'
 
@@ -19,7 +22,6 @@ const FONTS = ['Inter-Regular.ttf', 'Inter-Bold.ttf', 'NotoEmoji.ttf'].map((f) =
 process.on('unhandledRejection', (e) => console.error('unhandled rejection', e))
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
-const fetchJson = (url) => fetch(url, { signal: AbortSignal.timeout(5000) }).then((r) => (r.ok ? r.json() : null))
 
 // --- headers ---
 
@@ -58,24 +60,6 @@ setInterval(() => {
   for (const [k, h] of hits) h.reset < now && hits.delete(k)
 }, 60e3).unref()
 
-/** Run at most `n` of these at once; callers past a short queue get a 503. */
-function gate(n) {
-  let busy = 0
-  const queue = []
-  return async (fn) => {
-    if (busy >= n) {
-      if (queue.length >= 30) throw Object.assign(new Error('busy'), { status: 503 })
-      await new Promise((r) => queue.push(r))
-    }
-    busy++
-    try {
-      return await fn()
-    } finally {
-      busy--
-      queue.shift()?.()
-    }
-  }
-}
 const renders = gate(2)
 const previews = gate(16)
 
@@ -132,26 +116,7 @@ async function posterOf(u) {
   const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(5000) })
   const loc = r.headers.get('location') || ''
   if (!/^https:\/\/customer-[a-z0-9]+\.cloudflarestream\.com\/[\w.-]+\/manifest\/video\.m3u8/.test(loc)) return null
-  const url = loc.replace(/\/manifest\/video\.m3u8.*$/, '/thumbnails/thumbnail.jpg?time=1s&height=720')
-  posters.size > 2000 && posters.delete(posters.keys().next().value)
-  posters.set(id, { url, at: Date.now() })
-  return url
-}
-
-const n = (x = 0) => (x >= 1e4 ? Math.round(x / 1e3) + 'K' : x >= 1e3 ? (x / 1e3).toFixed(1) + 'K' : String(x))
-const MARK = 'M23.5 6.5c-6 .5-10.5 4.8-12 11.5l-1.6 7.5 1.4.4 2-5.2c4.6-.4 8.4-3.4 9.6-8.2-1.3.6-2.7.9-4 .9 1.9-1.2 3.6-3.6 4.6-6.9z'
-const isImg = (u) => /\.(png|jpe?g|gif|webp)(\?|$)/i.test(u) || /imagedelivery\.net|i\.imgur\.com/.test(u)
-const isVid = (u) => /\.(m3u8|mp4|webm|mov)(\?|$)/i.test(u)
-
-// Hypersnap leaves mentions out of the text and gives byte offsets (same as the app's castText)
-function castText(c) {
-  let b = Buffer.from(c.text || '')
-  ;(c.mentioned_profiles_ranges || [])
-    .map((r, i) => ({ ...r, u: c.mentioned_profiles?.[i] }))
-    .filter((r) => r.start === r.end && r.u?.username && r.start <= b.length)
-    .sort((x, y) => y.start - x.start)
-    .forEach((r) => (b = Buffer.concat([b.subarray(0, r.start), Buffer.from('@' + r.u.username), b.subarray(r.start)])))
-  return b.toString()
+  return keep(posters, 2000, id, { url: loc.replace(/\/manifest\/video\.m3u8.*$/, '/thumbnails/thumbnail.jpg?time=1s&height=720'), at: Date.now() }).url
 }
 
 /** The picture for the card: an attached image, else a link's preview image or X photo, else a video frame. */
@@ -176,7 +141,8 @@ async function card(c) {
   // only the first ~8 lines fit, so long casts are cut before wrapping
   const text = castText(c).slice(0, 600)
   const v = await visualOf(c)
-  const [pfp, pic] = await Promise.all([a.pfp_url ? dataUri(a.pfp_url) : null, v?.src ? dataUri(v.src) : null])
+  // the CDN's resized copies are a fraction of the originals and decode faster
+  const [pfp, pic] = await Promise.all([a.pfp_url ? dataUri(sized(a.pfp_url, 'w=176')) : null, v?.src ? dataUri(sized(v.src, 'w=840')) : null])
   const tile = !!(pic || v?.video || v?.tweet)
   // link previews are ~1.91:1, so they get a landscape tile; everything else a square
   const [ty, th] = v?.wide ? [172, 220] : [72, 420]
@@ -201,12 +167,12 @@ async function card(c) {
   ${pic ? `<image href="${pic}" x="712" y="${ty}" width="420" height="${th}" preserveAspectRatio="xMidYMid slice" clip-path="url(#pic)"/>` : ''}
   ${v?.video ? `<circle cx="922" cy="282" r="46" fill="#000" fill-opacity="0.55"/><path d="M908 258v48l40-24z" fill="#fff"/>` : ''}
   ${v?.label ? `<rect x="728" y="${ty + th - 48}" width="${Math.min(388, Math.round(width(v.label, 20) + 28))}" height="34" rx="17" fill="#000" fill-opacity="0.6"/><text x="742" y="${ty + th - 25}" font-family="Inter" font-weight="700" font-size="20" fill="#fff">${esc(wrap(v.label, 20, 360, 1)[0] || '')}</text>` : ''}
-  ${v?.tweet ? `<g transform="translate(744 104) scale(1.4)"><path d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.19L2 3h6.33l4.37 5.77zm-1.08 16.17h1.7L7.4 4.74H5.58z" fill="#edebf3"/></g>
+  ${v?.tweet ? `<g transform="translate(744 104) scale(1.4)"><path d="${X_LOGO}" fill="#edebf3"/></g>
   <text x="790" y="128" font-family="Inter, Noto Emoji" font-weight="700" font-size="24" fill="#edebf3">${esc(wrap(v.tweet.author.name || '', 24, 320, 1)[0] || '')}</text>
   <text x="744" y="168" font-family="Inter" font-size="20" fill="#9893a5">@${esc(v.tweet.author.handle || '')}</text>
   <text font-family="Inter, Noto Emoji" font-size="24" fill="#edebf3">${wrap((v.tweet.text || '').replace(/https?:\/\/\S+/g, '').trim().slice(0, 600) || ' ', 24, 356, 9).map((l, i) => `<tspan x="744" y="${214 + i * 32}">${esc(l) || ' '}</tspan>`).join('')}</text>` : ''}
   <line x1="84" y1="540" x2="1116" y2="540" stroke="#25232d" stroke-width="2"/>
-  <g transform="translate(84 562) scale(1.25)"><rect width="32" height="32" rx="9" fill="#5b3df5"/><path d="${MARK}" fill="#fff"/></g>
+  <g transform="translate(84 562) scale(1.25)"><rect width="32" height="32" rx="9" fill="#5b3df5"/><path d="${LOGO}" fill="#fff"/></g>
   <text x="138" y="593" font-family="Inter" font-weight="700" font-size="28" fill="#edebf3">Quilcast</text>
   <text x="1116" y="592" xml:space="preserve" font-family="Inter" font-size="24" fill="#9893a5" text-anchor="end">${n(replies)} ${replies === 1 ? 'reply' : 'replies'}  ·  ${n(recasts)} ${recasts === 1 ? 'recast' : 'recasts'}  ·  <tspan fill="#ff5c8a">♥ ${n(likes)}</tspan></text>
 </svg>`
@@ -214,14 +180,13 @@ async function card(c) {
 // rendering runs on libuv's pool, so it never blocks the event loop
 const render = (svg) => renderAsync(svg, { font: { fontFiles: FONTS, loadSystemFonts: false, defaultFontFamily: 'Inter' } }).then((img) => img.asPng())
 
-// small LRU-ish caches; failures drop out so they're retried. Rendered PNGs get their own, smaller one.
+// small caches; failures drop out so they're retried. Rendered PNGs get their own, smaller one.
 const cache = new Map()
 const pngs = new Map()
-const keep = (map, max, k, v) => (map.size >= max && map.delete(map.keys().next().value), map.set(k, v), v.catch(() => map.delete(k)), v)
-const remember = (k, v) => keep(cache, 1000, k, v)
-const getCast = (hash) => cache.get(hash) || remember(hash, fetchJson(`${NODE}/v2/farcaster/cast?identifier=${hash}&type=hash`).then((r) => r?.cast || (cache.delete(hash), null)))
-const getUser = (name) =>
-  cache.get(`u:${name}`) || remember(`u:${name}`, fetchJson(`${NODE}/v2/farcaster/user${/^\d+$/.test(name) ? `?fid=${name}` : `/by-username?username=${encodeURIComponent(name)}`}`).then((r) => r?.user || (cache.delete(`u:${name}`), null)))
+// a miss isn't kept, so the next request asks the node again
+const lookup = (k, path, pick) => cache.get(k) || keep(cache, 1000, k, fetchJson(NODE + path).then((r) => pick(r) || (cache.delete(k), null)))
+const getCast = (hash) => lookup(hash, `/v2/farcaster/cast?identifier=${hash}&type=hash`, (r) => r?.cast)
+const getUser = (name) => lookup(`u:${name}`, /^\d+$/.test(name) ? `/v2/farcaster/user?fid=${name}` : `/v2/farcaster/user/by-username?username=${encodeURIComponent(name)}`, (r) => r?.user)
 
 const index = await readFile(join(DIST, 'index.html'), 'utf8')
 // swap the default title/description/url/image in index.html for page-specific ones; replacements
@@ -239,11 +204,30 @@ function page({ title, desc, path, image, alt }) {
 }
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.txt': 'text/plain', '.json': 'application/json', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }
-const html = (res, body) => res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }).end(body)
-const json = (res, code, body, cache = 'no-store') => res.writeHead(code, { 'content-type': 'application/json', 'cache-control': cache }).end(JSON.stringify(body))
+
+// dist/ never changes while we run: its files are read once, and compressed once per encoding
+const files = new Map()
+const packed = new Map()
+const zip = { br: promisify(brotliCompress), gzip: promisify(gzip) }
+/** Send `body`, compressed when it's text over 1 KB and the client takes br or gzip. A `memo` key marks a body that never changes. */
+async function send(req, res, code, headers, body, memo) {
+  if (body.length > 1024 && /^(text\/|application\/(json|manifest)|image\/svg)/.test(headers['content-type'])) {
+    const accept = String(req.headers['accept-encoding'] || '')
+    const enc = /\bbr\b/.test(accept) ? 'br' : /\bgzip\b/.test(accept) ? 'gzip' : ''
+    headers = { ...headers, vary: 'accept-encoding' }
+    if (enc) {
+      body = await (memo ? packed.get(memo + enc) || keep(packed, 100, memo + enc, zip[enc](body)) : zip[enc](body))
+      headers['content-encoding'] = enc
+    }
+  }
+  res.writeHead(code, { ...headers, 'content-length': body.length }).end(body)
+}
 
 createServer(async (req, res) => {
   for (const [k, v] of Object.entries(SECURITY)) res.setHeader(k, v)
+  const html = (body, memo) => send(req, res, 200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' }, Buffer.from(body), memo)
+  const json = (code, body, cache = 'no-store') => send(req, res, code, { 'content-type': 'application/json', 'cache-control': cache }, Buffer.from(JSON.stringify(body)))
+  const app = () => html(index, 'index.html')
   let url, path
   try {
     url = new URL(req.url, 'http://x')
@@ -258,7 +242,7 @@ createServer(async (req, res) => {
     const up = path.match(/^\/api\/upload(?:\/([0-9a-f-]{36})(\/done)?)?$/)
     if (up) {
       const [, id, fin] = up
-      if (!id && req.method === 'POST' && limited(`up:${ip}`, 30, 600e3)) return json(res, 429, { error: 'Too many uploads, try again in a few minutes.' })
+      if (!id && req.method === 'POST' && limited(`up:${ip}`, 30, 600e3)) return json(429, { error: 'Too many uploads, try again in a few minutes.' })
       const r = await Promise.resolve()
         .then(() =>
           !id && req.method === 'POST' ? start(req, { node: NODE })
@@ -270,14 +254,14 @@ createServer(async (req, res) => {
         .catch((e) => e)
       const err = r instanceof Error
       if (err && !r.status) console.error('upload', r)
-      return json(res, err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Upload failed' } : r)
+      return json(err ? r.status || 500 : 200, err ? { error: r.status ? r.message : 'Upload failed' } : r)
     }
 
     if (path === '/api/unfurl') {
       const target = url.searchParams.get('url') || ''
-      if (!/^https?:\/\//i.test(target) || target.length > 2048) return json(res, 200, null)
-      if (!cached(target) && limited(`unfurl:${ip}`, 90)) return json(res, 429, null)
-      return json(res, 200, await previews(() => unfurl(target)), 'public, max-age=86400')
+      if (!/^https?:\/\//i.test(target) || target.length > 2048) return json(200, null)
+      if (!cached(target) && limited(`unfurl:${ip}`, 90)) return json(429, null)
+      return json(200, await previews(() => unfurl(target)), 'public, max-age=86400')
     }
 
     if (path === '/api/poster') {
@@ -320,31 +304,31 @@ createServer(async (req, res) => {
     const cast = path.match(/^\/c\/(?:0x)?([0-9a-f]{40})$/i)
     if (cast) {
       const hash = cast[1].toLowerCase()
-      if (!cache.has(hash) && limited(`look:${ip}`, 120)) return html(res, index)
+      if (!cache.has(hash) && limited(`look:${ip}`, 120)) return app()
       const c = await getCast(hash)
-      if (!c) return html(res, index)
+      if (!c) return app()
       const desc = castText(c).slice(0, 280) || 'A cast on Farcaster'
-      return html(res, page({ title: `${c.author?.display_name || c.author?.username} (@${c.author?.username}) on Quilcast`, desc, path, image: `${SITE}/og/c/${hash}.png`, alt: desc }))
+      return html(page({ title: `${c.author?.display_name || c.author?.username} (@${c.author?.username}) on Quilcast`, desc, path, image: `${SITE}/og/c/${hash}.png`, alt: desc }))
     }
 
     const user = path.match(/^\/u\/([^/]{1,64})$/)
     if (user) {
-      if (!cache.has(`u:${user[1]}`) && limited(`look:${ip}`, 120)) return html(res, index)
+      if (!cache.has(`u:${user[1]}`) && limited(`look:${ip}`, 120)) return app()
       const u = await getUser(user[1]).catch(() => null)
-      if (!u) return html(res, index)
-      return html(res, page({ title: `${u.display_name || u.username} (@${u.username}) on Quilcast`, desc: u.profile?.bio?.text || `${u.display_name || u.username} on Farcaster`, path }))
+      if (!u) return app()
+      return html(page({ title: `${u.display_name || u.username} (@${u.username}) on Quilcast`, desc: u.profile?.bio?.text || `${u.display_name || u.username} on Farcaster`, path }))
     }
 
     const file = normalize(join(DIST, path))
     if (file.startsWith(DIST) && extname(file)) {
-      const body = await readFile(file).catch(() => null)
-      if (body) return res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=3600' }).end(body)
-      return res.writeHead(404).end()
+      const body = await (files.get(file) || keep(files, 300, file, readFile(file))).catch(() => null)
+      if (!body) return res.writeHead(404).end()
+      return send(req, res, 200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'public, max-age=3600' }, body, file)
     }
-    html(res, index)
+    return app()
   } catch (e) {
     if (e.status === 503) return res.headersSent ? res.destroy() : res.writeHead(503).end()
     console.error(path, e)
-    res.headersSent ? res.destroy() : html(res, index)
+    res.headersSent ? res.destroy() : app()
   }
 }).listen(process.env.PORT || 3000)

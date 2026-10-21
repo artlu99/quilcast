@@ -1,8 +1,9 @@
 import { render, type ComponentChildren } from 'preact'
-import { useEffect, useRef, useState } from 'preact/hooks'
-import { account, accounts, back, castText, get, go, hydrateParents, idOf, isFollowing, loadMine, posting, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { account, accounts, back, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
-import { ago, Avatar, CastCard, handle, Icon, Lightbox, Logo, n, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
+import { castText, n } from './shared.ts'
+import { ago, Avatar, CastCard, fetchCast, handle, Icon, Lightbox, Logo, Menu, nameOf, P, RichText, shell, toast, UserRow, userPath, w } from './ui.tsx'
 import './style.css'
 
 function Join({ step }: { step?: string }) {
@@ -37,13 +38,12 @@ const Tabs = <T extends string>({ tabs, value, set }: { tabs: [T, string][]; val
   </nav>
 )
 
+const Version = () => <>v{__VERSION__} · <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">Source</a></>
+
 // every saved account with a way to switch, plus "Add account"
 function AccountList({ onDone }: { onDone?: () => void }) {
   const [, force] = useState(0)
-  useEffect(() => {
-    const fids = accounts.map((a) => a.fid).filter((f): f is number => !!f && !users.has(f))
-    fids.length && get('/v2/farcaster/user/bulk', { fids: fids.join(',') }).then((r) => (r.users.forEach((u: User) => users.set(u.fid, u)), force((x) => x + 1)), () => {})
-  }, [])
+  useEffect(() => void loadUsers(accounts.map((a) => a.fid)).then(() => force((x) => x + 1)), [])
   return (
     <div class="accounts">
       {accounts.map((a) => {
@@ -53,29 +53,23 @@ function AccountList({ onDone }: { onDone?: () => void }) {
           <button class={`acct${on ? ' on' : ''}`} onClick={() => (on ? onDone?.() : switchAccount(a))}>
             <Avatar u={u} size={32} link={false} />
             <span><b>{u.display_name || a.display || (a.username ? `@${a.username}` : 'New account')}</b><small>{a.done ? `@${handle(u)}` : 'Setting up'}</small></span>
-            {on && <Icon d="M20 6 9 17l-5-5" />}
+            {on && <Icon d={P.check} />}
           </button>
         )
       })}
-      <button class="acct add" onClick={() => (onDone?.(), go('/join'))}><span class="plus"><Icon d="M12 5v14M5 12h14" /></span><span><b>Add account</b></span></button>
+      <button class="acct add" onClick={() => (onDone?.(), go('/join'))}><span class="plus"><Icon d={P.plus} /></span><span><b>Add account</b></span></button>
     </div>
   )
 }
 
 function AccountMenu({ me }: { me: User }) {
   const [open, setOpen] = useState(false)
-  useEffect(() => {
-    if (!open) return
-    const f = (e: MouseEvent) => !(e.target as Element).closest('.me-wrap') && setOpen(false)
-    addEventListener('click', f)
-    return () => removeEventListener('click', f)
-  }, [open])
   return (
     <div class="me-wrap">
-      {open && <div class="menu up"><AccountList onDone={() => setOpen(false)} /></div>}
+      {open && <Menu class="up" close={() => setOpen(false)}><AccountList onDone={() => setOpen(false)} /></Menu>}
       <button class="me" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Avatar u={me} size={34} link={false} />
-        <span><b>{me.display_name || handle(me)}</b><small>@{handle(me)}</small></span>
+        <span><b>{nameOf(me)}</b><small>@{handle(me)}</small></span>
         <Icon d={P.more} />
       </button>
     </div>
@@ -139,27 +133,19 @@ function Pager<T>({ load, k, empty, id, row, initial }: { load: (cursor?: string
   )
 }
 
-// first pages of the home feeds are kept per account, so a reload paints immediately
-const stash = {
-  get: (key?: string): Cast[] | undefined => {
-    try {
-      return key ? JSON.parse(localStorage.getItem(`quilcast:feed:${key}`) || 'null') || undefined : undefined
-    } catch {}
-  },
-  set: (key: string | undefined, casts: Cast[]) => {
-    try {
-      key && localStorage.setItem(`quilcast:feed:${key}`, JSON.stringify(casts.slice(0, 20)))
-    } catch {}
-  },
-}
-
+// `cacheKey` keeps a feed's first page in this browser, so a reload paints it immediately
 const Feed = ({ load, k, empty, keep, cacheKey }: { load: (cursor?: string) => Promise<Page>; k: string; empty?: string; keep?: (c: Cast) => boolean; cacheKey?: string }) => (
-  <Pager<Cast> k={k} empty={empty} id={(c) => c.hash} row={(cs) => cs.map((c) => <CastCard key={c.hash} c={c} />)} initial={() => stash.get(cacheKey) || []}
+  <Pager<Cast> k={k} empty={empty} id={(c) => c.hash} row={(cs) => cs.map((c) => <CastCard key={c.hash} c={c} />)}
+    initial={() => (cacheKey ? read<Cast[]>(`quilcast:feed:${cacheKey}`, []) : [])}
     load={async (cursor) => {
       const r = await load(cursor)
       const casts = keep ? r.casts.filter(keep) : r.casts
       await hydrateParents(casts)
-      if (!cursor) stash.set(cacheKey, casts)
+      if (!cursor && cacheKey) {
+        try {
+          save(`quilcast:feed:${cacheKey}`, casts.slice(0, 20))
+        } catch {}
+      }
       return { items: casts, cursor: r.casts.length ? r.next?.cursor || null : null }
     }} />
 )
@@ -218,7 +204,7 @@ function NoteRow({ g }: { g: Group }) {
       <span class={`note-icon ${cls}`}><Icon d={icon} fill={g.type === 'likes'} size={20} /></span>
       <span class="note-body">
         <span class="note-avatars">{g.users.slice(0, 7).map((u) => <Avatar u={u} size={30} link={false} />)}</span>
-        <span><b>{first.display_name || handle(first)}</b>{g.users.length > 1 && ` and ${g.users.length - 1} ${g.users.length === 2 ? 'other' : 'others'}`} {verb} <span class="muted">· {ago(g.timestamp)}</span></span>
+        <span><b>{nameOf(first)}</b>{g.users.length > 1 && ` and ${g.users.length - 1} ${g.users.length === 2 ? 'other' : 'others'}`} {verb} <span class="muted">· {ago(g.timestamp)}</span></span>
         {g.cast && <span class="note-cast">{castText(g.cast) || 'Your cast'}</span>}
       </span>
     </a>
@@ -237,11 +223,14 @@ const group = (notes: Note[]) => {
   return [...out.values()]
 }
 
+// ponytail: the node returns at most 100 reactions or quotes per cast and can't page them, so lists stop there
+const quotesOf = async (hash: string, limit = 100) => (await get('/v2/farcaster/cast/quotes', { identifier: hash, type: 'hash', limit })).casts as Cast[]
+
 // Hypersnap's notifications leave quotes out, so they're looked up per cast
 // ponytail: only quotes of our 25 newest casts show up; quote notifications on the node would cover the rest
 async function quotesOfMine(): Promise<Note[]> {
   const casts = (await get('/v2/farcaster/feed/user/casts', { fid: account!.fid, limit: 25 })).casts as Cast[]
-  const lists = await Promise.all(casts.map((c) => get('/v2/farcaster/cast/quotes', { identifier: c.hash, type: 'hash', limit: 25 }).then((r) => r.casts as Cast[], () => [])))
+  const lists = await Promise.all(casts.map((c) => quotesOf(c.hash, 25).catch(() => [])))
   const quotes = new Map(lists.flat().filter((q) => q.author.fid !== account!.fid).map((q) => [q.hash, q]))
   return [...quotes.values()].map((q) => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp }))
 }
@@ -249,6 +238,8 @@ async function quotesOfMine(): Promise<Note[]> {
 function Notifications() {
   const [tab, setTab] = useState<'all' | 'replies'>('all')
   const [round, reload] = useReload()
+  // one lookup per visit or reload: switching tabs reuses it
+  const quotes = useMemo(() => (account?.done ? quotesOfMine().catch(() => []) : Promise.resolve([])), [round])
   const held = useRef<Note[]>([])
   useEffect(() => {
     // opening the page marks everything up to now as seen
@@ -265,14 +256,14 @@ function Notifications() {
         id={(n) => `${n.type}:${n.cast?.hash}:${n.user.fid}:${n.timestamp}`}
         row={(ns) => group(ns).map((g) => <NoteRow key={g.key} g={g} />)}
         load={async (cursor) => {
-          const [r, quotes] = await Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor }), cursor ? held.current : quotesOfMine().catch(() => [])])
+          const [r, qs] = await Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor }), cursor ? held.current : quotes])
           const notes = r.notifications as Note[]
           const next = notes.length ? r.next?.cursor || null : null
           // quotes slot in by time; ones older than this page wait for a later one
           const edge = next ? notes[notes.length - 1].timestamp : ''
           const seen = new Set(notes.map((n) => n.cast?.hash))
-          held.current = quotes.filter((q) => q.timestamp < edge)
-          const items = [...notes, ...quotes.filter((q) => q.timestamp >= edge && !seen.has(q.cast!.hash))]
+          held.current = qs.filter((q) => q.timestamp < edge)
+          const items = [...notes, ...qs.filter((q) => q.timestamp >= edge && !seen.has(q.cast!.hash))]
             .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
             .filter((n) => n.user && (tab === 'all' || (n.cast && !ACT(n.type))))
           await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
@@ -302,8 +293,6 @@ function useUnread() {
 }
 
 const WHO = { likes: 'Liked by', recasts: 'Recast by', quotes: 'Quotes' }
-// ponytail: the node returns at most 100 reactions or quotes per cast and can't page them, so lists stop there
-const quotesOf = async (hash: string) => (await get('/v2/farcaster/cast/quotes', { identifier: hash, type: 'hash', limit: 100 })).casts as Cast[]
 
 /** Who liked or recast a cast, or the casts quoting it. */
 function Who({ hash, kind }: { hash: string; kind: keyof typeof WHO }) {
@@ -313,12 +302,10 @@ function Who({ hash, kind }: { hash: string; kind: keyof typeof WHO }) {
       <Pager<Cast | User> k={`${hash}:${kind}`} empty={kind === 'quotes' ? 'No quotes yet.' : 'Nobody yet.'}
         id={(x) => ('hash' in x ? x.hash : String(x.fid))}
         row={(xs) => xs.map((x) => ('hash' in x ? <CastCard key={x.hash} c={x} /> : <UserRow key={x.fid} u={x} />))}
-        load={async () => {
-          if (kind !== 'quotes') return { items: (await get('/v2/farcaster/reactions/cast', { hash, types: kind, limit: 100 })).reactions.map((r: { user: User }) => r.user), cursor: null }
-          const casts = await quotesOf(hash)
-          await hydrateParents(casts)
-          return { items: casts, cursor: null }
-        }} />
+        load={async () => ({
+          items: kind === 'quotes' ? await hydrateParents(await quotesOf(hash)) : (await get('/v2/farcaster/reactions/cast', { hash, types: kind, limit: 100 })).reactions.map((r: { user: User }) => r.user),
+          cursor: null,
+        })} />
     </>
   )
 }
@@ -342,7 +329,7 @@ function Thread({ hash }: { hash: string }) {
       walked = true
       const chain: Cast[] = []
       for (let p = cast.parent_hash; p && chain.length < 5; ) {
-        const pc = (await get('/v2/farcaster/cast', { identifier: p, type: 'hash' }).catch(() => null))?.cast as Cast | undefined
+        const pc = await fetchCast(p)
         if (!pc || !live) break
         chain.unshift(pc)
         setUp([...chain])
@@ -377,7 +364,7 @@ function Thread({ hash }: { hash: string }) {
           {up.map((p) => <CastCard key={p.hash} c={p} line inThread />)}
           <CastCard c={c} focus quotes={quotes} />
           <button class="reply-prompt" onClick={() => (account?.done ? shell.compose({ parent: c }) : go('/join'))}>
-            {account?.done && <Avatar u={users.get(account.fid!) || { fid: account.fid! }} size={32} link={false} />}
+            {account?.done && <Avatar u={myUser()!} size={32} link={false} />}
             <span>Post your reply</span>
           </button>
           {(c.direct_replies || []).map((r) => {
@@ -407,8 +394,7 @@ function Profile({ id }: { id: string }) {
     setU(null)
     setErr('')
     setTab('casts')
-    const q = /^\d+$/.test(id) ? get('/v2/farcaster/user', { fid: id }) : get('/v2/farcaster/user/by-username', { username: id })
-    q.then((r) => (users.set(r.user.fid, r.user), setU(r.user), isFollowing(r.user.fid).then((f) => ((was.current = f), setFollowing(f)))), () => setErr('No one goes by that name.'))
+    getUser(id).then((u) => (setU(u), isFollowing(u.fid).then((f) => ((was.current = f), setFollowing(f)))), () => setErr('No one goes by that name.'))
   }, [id])
   const self = account?.fid === u?.fid
   const toggle = () => {
@@ -419,7 +405,7 @@ function Profile({ id }: { id: string }) {
   }
   return (
     <>
-      <Header title={u ? u.display_name || handle(u) : 'Profile'} />
+      <Header title={u ? nameOf(u) : 'Profile'} />
       {err && <div class="note">{err}</div>}
       {!u && !err && <div class="spinner" />}
       {u && (
@@ -429,7 +415,7 @@ function Profile({ id }: { id: string }) {
               <Avatar u={u} size={72} link={false} />
               {self ? <a class="btn ghost small" href="/settings">Edit profile</a> : <button class={`btn small${following ? ' ghost' : ''}`} onClick={toggle} disabled={following === null && !!account?.done}>{following ? 'Following' : 'Follow'}</button>}
             </div>
-            <h2>{u.display_name || handle(u)}</h2>
+            <h2>{nameOf(u)}</h2>
             <div class="handle">@{handle(u)} <span class="pill">fid {u.fid}</span></div>
             {u.profile?.bio?.text && <RichText text={u.profile.bio.text} />}
             <div class="counts"><span><b>{n(u.following_count)}</b> following</span><span><b>{n((u.follower_count || 0) + +!!following - +was.current)}</b> followers</span></div>
@@ -458,12 +444,7 @@ function Search() {
   useEffect(() => {
     history.replaceState(null, '', term ? `/search?${new URLSearchParams({ q: term, ...(tab === 'casts' && { t: 'casts' }) })}` : '/search')
     setPeople(null)
-    if (tab === 'people' && term) get('/v2/farcaster/user/search', { q: term.replace(/^@/, ''), limit: 50 }).then((r) => {
-        // the node ranks loosely: exact handles first, then by followers
-        const q = term.replace(/^@/, '').toLowerCase()
-        const rank = (u: User) => (u.username === q || u.username === q + '.eth' ? 1e12 : 0) + (u.follower_count || 0)
-        setPeople(((r.users || r.result?.users || []) as User[]).sort((a, b) => rank(b) - rank(a)).slice(0, 25))
-      }, () => setPeople([]))
+    if (tab === 'people' && term) findUsers(term).then((us) => setPeople(us.slice(0, 25)), () => setPeople([]))
   }, [term, tab])
   return (
     <>
@@ -493,19 +474,21 @@ function Settings() {
   useEffect(() => {
     if (!account?.fid) return
     get('/v1/userDataByFid', { fid: account.fid }).then((r) => {
-      const T: Record<string, number> = { USER_DATA_TYPE_DISPLAY: 2, USER_DATA_TYPE_BIO: 3, USER_DATA_TYPE_PFP: 1, USER_DATA_TYPE_URL: 5 }
       const v: Record<number, string> = {}
-      for (const m of r.messages) T[m.data.userDataBody.type] && (v[T[m.data.userDataBody.type]] = m.data.userDataBody.value)
+      for (const { data } of r.messages) {
+        const k = String(data.userDataBody.type).replace('USER_DATA_TYPE_', '')
+        if (Object.hasOwn(USER_DATA, k)) v[USER_DATA[k as keyof typeof USER_DATA]] = data.userDataBody.value
+      }
       setProf(v)
       setOrig(v)
     }, () => {})
   }, [])
-  const dirty = Object.keys({ ...prof, ...orig }).some((k) => (prof[+k] || '') !== (orig[+k] || ''))
-  const save = async () => {
+  const changed = Object.keys({ ...prof, ...orig }).map(Number).filter((k) => (prof[k] || '') !== (orig[k] || ''))
+  const saveProfile = async () => {
     setSaving(true)
     try {
       const m = await w()
-      for (const k of Object.keys(prof).map(Number)) if ((prof[k] || '') !== (orig[k] || '')) await m.setUserData(k, prof[k] || '')
+      for (const k of changed) await m.setUserData(k, prof[k] || '')
       setOrig(prof)
       toast('Profile saved')
     } catch (e: any) {
@@ -548,12 +531,16 @@ function Settings() {
     const custody = acc.wallet ? undefined : await m.custodyKey(acc.phrase)
     const keys = custody ? { recoveryPhrase: acc.phrase, custodyAddress: fc.address(custody), custodyPrivateKey: '0x' + fc.hex(custody) } : { custodyAddress: acc.wallet }
     const data = { fid: acc.fid, username: acc.username, ...keys, signerPrivateKey: acc.signer && '0x' + acc.signer }
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: `quilcast-${account!.username || account!.fid}-keys.json` })
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: `quilcast-${acc.username || acc.fid}-keys.json` })
     a.click()
     URL.revokeObjectURL(a.href)
   }
-  const field = (t: number, label: string, ph: string) => (
-    <label class="field"><span>{label}</span><input value={prof[t] || ''} placeholder={ph} maxLength={256} onInput={(e) => setProf({ ...prof, [t]: e.currentTarget.value })} /></label>
+  const field = (t: number, label: string, ph: string, area = false) => {
+    const p = { value: prof[t] || '', placeholder: ph, maxLength: 256, onInput: (e: { currentTarget: { value: string } }) => setProf({ ...prof, [t]: e.currentTarget.value }) }
+    return <label class="field"><span>{label}</span>{area ? <textarea rows={3} {...p} /> : <input {...p} />}</label>
+  }
+  const url = (k: 'node' | 'rpc', label: string) => (
+    <label class="field"><span>{label}</span><input value={settings[k]} onChange={(e) => ((settings[k] = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
   )
   return (
     <>
@@ -574,9 +561,9 @@ function Settings() {
               <input ref={photo} type="file" accept="image/*" hidden onChange={(e) => newPhoto(e.currentTarget.files?.[0])} />
             </div>
             {field(USER_DATA.DISPLAY, 'Name', 'Your name')}
-            <label class="field"><span>Bio</span><textarea rows={3} maxLength={256} value={prof[USER_DATA.BIO] || ''} placeholder="A line or two about you" onInput={(e) => setProf({ ...prof, [USER_DATA.BIO]: e.currentTarget.value })} /></label>
+            {field(USER_DATA.BIO, 'Bio', 'A line or two about you', true)}
             {field(USER_DATA.URL, 'Website', 'https://…')}
-            {dirty && <div class="actions"><button class="btn small" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></div>}
+            {changed.length > 0 && <div class="actions"><button class="btn small" onClick={saveProfile} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></div>}
           </section>
         )}
         <section>
@@ -606,10 +593,10 @@ function Settings() {
         )}
         <section>
           <h2>Network</h2>
-          <label class="field"><span>Hypersnap node</span><input value={settings.node} onChange={(e) => ((settings.node = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
-          <label class="field"><span>Optimism RPC</span><input value={settings.rpc} onChange={(e) => ((settings.rpc = e.currentTarget.value.replace(/\/+$/, '')), saveSettings())} /></label>
+          {url('node', 'Hypersnap node')}
+          {url('rpc', 'Optimism RPC')}
         </section>
-        <p class="foot">Quilcast v{__VERSION__} · <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">Source</a></p>
+        <p class="foot">Quilcast <Version /></p>
       </div>
     </>
   )
@@ -663,9 +650,9 @@ function App() {
   useEffect(() => {
     const f = () => force((x) => x + 1)
     loadMine().then(f)
-    account?.fid && get('/v2/farcaster/user', { fid: account.fid }).then((r) => (users.set(account!.fid!, r.user), f()), () => {})
+    account?.fid && getUser(account.fid).then(f, () => {})
   }, [account?.fid])
-  const me = account?.done ? users.get(account.fid!) || { fid: account.fid!, username: account.username } : null
+  const me = account?.done ? myUser() : null
   const view =
     r0 === 'c' ? (Object.hasOwn(WHO, r2) ? <Who hash={r1} kind={r2 as keyof typeof WHO} /> : <Thread hash={r1} />)
       : r0 === 'u' ? <Profile id={decode(r1)} />
@@ -677,11 +664,12 @@ function App() {
   const nav: [string, string, string][] = [['', 'Home', P.home], ['search', 'Search', P.search], ...(me ? [['notifications', 'Notifications', P.bell] as [string, string, string]] : []), me ? ['u', 'Profile', P.user] : ['join', 'Join', P.user], ['settings', 'Settings', P.gear]]
   const href = (k: string) => (k === 'u' ? userPath(me!) : `/${k}`)
   const active = (k: string) => (k === 'u' ? r0 === 'u' && !!me && userPath(me) === `/u/${r1}` : r0 === k)
+  const ico = (k: string, d: string) => <span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span>
   return (
     <div class="app">
       <nav class="side" aria-label="Main">
         <a class="brand" href="/"><Logo size={30} /><span>Quilcast</span></a>
-        {nav.filter(([k]) => k !== 'join').map(([k, label, d]) => <a class={`navlink${active(k) ? ' on' : ''}`} href={href(k)}><span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span><span>{label}</span></a>)}
+        {nav.filter(([k]) => k !== 'join').map(([k, label, d]) => <a class={`navlink${active(k) ? ' on' : ''}`} href={href(k)}>{ico(k, d)}<span>{label}</span></a>)}
         {me ? <button class="btn cast-btn" onClick={() => setCompose({})}><Icon d={P.pen} /><span>Cast</span></button> : <a class="btn cast-btn" href="/join" aria-label="Join"><Icon d={P.user} /><span>Join</span></a>}
         {me && <AccountMenu me={me} />}
       </nav>
@@ -691,11 +679,11 @@ function App() {
         <div class="about">
           <b>About Quilcast</b>
           <p>A small, open Farcaster client that reads from and posts to Quilibrium's Hypersnap network, with your keys kept in your browser.</p>
-          <p class="foot">v{__VERSION__} · <a href="https://github.com/backmeupplz/quilcast" target="_blank" rel="noopener">Source</a></p>
+          <p class="foot"><Version /></p>
         </div>
       </aside>
       <nav class="tabbar" aria-label="Main">
-        {nav.map(([k, label, d]) => <a class={active(k) ? 'on' : ''} href={href(k)} aria-label={label}><span class="ico"><Icon d={d} size={22} />{k === 'notifications' && unread && <i class="badge" />}</span></a>)}
+        {nav.map(([k, label, d]) => <a class={active(k) ? 'on' : ''} href={href(k)} aria-label={label}>{ico(k, d)}</a>)}
       </nav>
       {me && r0 !== 'join' && r0 !== 'settings' && <button class="fab" aria-label="New cast" onClick={() => setCompose({})}><Icon d={P.pen} size={22} /></button>}
       {compose && <Composer {...compose} onClose={() => setCompose(null)} />}
