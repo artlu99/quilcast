@@ -2,8 +2,8 @@ import { render, type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
-import { castText, n } from './shared.ts'
-import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w, askPush, pushOn } from './ui.tsx'
+import { castText, n, sized } from './shared.ts'
+import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, Img, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, thumbOf, urlsOf, UserRow, userPath, w, askPush, pushOn } from './ui.tsx'
 import type { AppMeta } from './miniapp.tsx'
 import './style.css'
 
@@ -192,10 +192,17 @@ function NoteRow({ g }: { g: Group }) {
       <span class="note-body">
         <span class="note-avatars">{g.users.slice(0, 7).map((u) => <Avatar u={u} size={30} link={false} />)}</span>
         <span><b>{nameOf(first)}</b>{g.users.length > 1 && ` and ${g.users.length - 1} ${g.users.length === 2 ? 'other' : 'others'}`} {verb} <span class="muted">· {ago(g.timestamp)}</span></span>
-        {g.cast && <span class="note-cast">{castText(g.cast) || 'Your cast'}</span>}
+        {g.cast && <NotePeek c={g.cast} />}
       </span>
     </a>
   )
+}
+
+// a cast that is only media shows a thumbnail; one that is only a link shows the link
+function NotePeek({ c }: { c: Cast }) {
+  const text = castText(c).trim()
+  const img = !text && thumbOf(c)
+  return img ? <Img class="qimg" src={sized(img, 'w=240')} /> : <span class="note-cast">{text || urlsOf(c)[0] || 'Your cast'}</span>
 }
 
 // group likes/recasts per cast and follows per day; replies and mentions stay one per cast

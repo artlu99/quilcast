@@ -145,9 +145,14 @@ export function RichText({ text, class: cls = 'text' }: { text: string; class?: 
   )
 }
 
-const urlsOf = (c: Cast) => c.embeds.flatMap((e) => safeUrl(e.url) ?? [])
+export const urlsOf = (c: Cast) => c.embeds.flatMap((e) => safeUrl(e.url) ?? [])
 // Farcaster's streams get a first-frame poster from our server
 const poster = (src?: string) => (src && /^https:\/\/stream\.farcaster\.xyz\//.test(src) ? `/api/poster?url=${encodeURIComponent(src)}` : undefined)
+/** the cast's first image, or its video's poster */
+export const thumbOf = (c: Cast) => {
+  const urls = urlsOf(c)
+  return urls.find(isImg) || poster(urls.find(isVid))
+}
 
 // HLS plays natively in Safari and Chrome; Firefox-based browsers get hls.js, loaded on first play
 export function Video({ src }: { src: string }) {
@@ -294,8 +299,7 @@ export function QuoteCard({ hash, c: given }: { hash?: string; c?: Cast }) {
   useEffect(() => void (hash && !given && fetchCast(hash).then(setC)), [hash])
   if (c === null) return <div class="quote muted">This cast is unavailable.</div>
   if (!c) return <div class="quote skeleton" />
-  const urls = urlsOf(c)
-  const img = urls.find(isImg) || poster(urls.find(isVid))
+  const img = thumbOf(c)
   const text = castText(c).trim()
   return (
     <a class="quote" href={`/c/${c.hash}`} onClick={stop}>
