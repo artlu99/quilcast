@@ -16,7 +16,6 @@ import { askPush, channelOf, fetchCast, handle, Icon, Img, Menu, P, shell, toast
 import { custodyOf, signEvent } from './write.ts'
 
 const QUILCAST_FID = 3356316
-const MAX = 6
 const CHAINS = Object.fromEntries([base, optimism, mainnet, arbitrum, polygon, celo, zora, unichain, monad, degen, baseSepolia].map((c) => [c.id, c]))
 
 // --- Ethereum wallets ---
@@ -114,7 +113,6 @@ export function launch(m: AppMeta, ctx: { cast?: Cast; embed?: string; from?: st
   if (origin === location.origin) return toast("Quilcast can't open itself as a mini app.")
   const open = apps.find((a) => a.url === url)
   if (open) return show(open)
-  if (apps.length >= MAX) return toast(`Up to ${MAX} mini apps run at once. Close one first.`)
   if (!root) render(<Host />, (root = document.body.appendChild(document.createElement('div'))))
   const bg = /^#[0-9a-f]{3,8}$/i.test(m.bg || '') ? m.bg : undefined
   const app: App = {
@@ -816,7 +814,8 @@ function Host() {
       {apps.map((app) => <Window key={app.id} app={app} />)}
       {apps.length > 0 && (
         <nav class={`dock${shown ? ' behind' : ''}`} aria-label="Open mini apps">
-          {apps.map((app) => <button class={shown === app.id ? 'on' : ''} aria-label={app.name} title={app.name} onClick={() => show(shown === app.id ? null : app)}><AppIcon app={app} /></button>)}
+          {/* the one on screen scrolls into view when there are more than fit */}
+          {apps.map((app) => <button class={shown === app.id ? 'on' : ''} ref={(el) => void (el && shown === app.id && el.scrollIntoView({ block: 'nearest', inline: 'nearest' }))} aria-label={app.name} title={app.name} onClick={() => show(shown === app.id ? null : app)}><AppIcon app={app} /></button>)}
         </nav>
       )}
     </>
