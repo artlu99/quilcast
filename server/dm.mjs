@@ -17,6 +17,7 @@ const OPS = {
   read: ['POST', '/v2/direct-cast-mark-read'],
   category: ['POST', '/v2/direct-cast-conversation-categorization'],
   mute: ['POST', '/v2/direct-cast-conversation-notifications'],
+  ttl: ['POST', '/v2/direct-cast-conversation-message-ttl'],
 }
 
 async function json(req) {
@@ -41,7 +42,7 @@ export async function dm(req, op, url) {
   if (!Object.hasOwn(OPS, op)) throw fail(404, 'not found')
   const [method, path, params = []] = OPS[op]
   if (req.method !== method) throw fail(405, `${method} only`)
-  const qs = new URLSearchParams(params.flatMap((k) => (url.searchParams.has(k) ? [[k, url.searchParams.get(k).slice(0, 300)]] : [])))
+  const qs = new URLSearchParams(params.flatMap((k) => (url.searchParams.has(k) ? [[k, url.searchParams.get(k).slice(0, 2000)]] : [])))
   const token = String(req.headers.authorization || '').match(/^Bearer (\S{10,500})$/)?.[1]
   if (!token && op !== 'nonce') throw fail(401, 'Open messages first.')
   return call(method, path + (qs.size ? `?${qs}` : ''), token, method === 'GET' ? undefined : JSON.stringify(await json(req)))

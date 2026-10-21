@@ -242,6 +242,9 @@ h1, h2 { margin: 0; letter-spacing: -0.01em; }
 .menu button:hover { background: var(--soft); }
 .menu small { margin-left: auto; color: var(--muted); font-weight: 400; }
 .menu.up { top: auto; bottom: calc(100% + 6px); width: 260px; }
+.menu.right { left: auto; right: 0; }
+.menu-label { margin: 8px 10px 2px; }
+.menu [role='menuitemradio'] { justify-content: space-between; }
 .accounts { display: flex; flex-direction: column; }
 .acct { display: flex !important; align-items: center; gap: 10px; width: 100%; padding: 8px !important; border: 0; background: none; border-radius: 10px; text-align: left; color: var(--ink); }
 .acct:hover { background: var(--soft); }
@@ -298,18 +301,28 @@ a.searchbox:hover { text-decoration: none; border-color: var(--line); }
 .more { display: block; margin: 16px auto; }
 .unread-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; flex: none; }
 .plain { color: inherit; }
-.chat { display: flex; flex-direction: column; gap: 3px; padding: 8px 16px 16px; }
+/* a conversation fills the screen under the header: messages stack up from the message box */
+.dm { display: flex; flex-direction: column; min-height: calc(100vh - 53px); min-height: calc(100dvh - 53px); }
+.chat { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 3px; padding: 8px 16px 16px; }
+.chat-title { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.chat-title svg { color: var(--muted); flex: none; }
 .earlier { align-self: center; margin: 4px 0 8px; font-size: 14px; }
-.msg { display: flex; flex-direction: column; align-items: flex-start; }
-.msg.mine { align-items: flex-end; }
+.msg { display: flex; align-items: flex-end; gap: 8px; }
+.msg.mine { justify-content: flex-end; }
+.msg-face { width: 28px; flex: none; }
+.msg-col { display: flex; flex-direction: column; align-items: flex-start; max-width: min(78%, 460px); min-width: 0; }
+.mine .msg-col { align-items: flex-end; }
+.msg-state { color: var(--muted); }
+.dm-img { padding: 0; border: 0; background: none; border-radius: 16px; overflow: hidden; cursor: zoom-in; }
+.dm-img img { display: block; max-width: 100%; max-height: 320px; }
 .msg-who { font-size: 12px; color: var(--muted); margin: 8px 0 2px 12px; }
 .msg-note { align-self: center; color: var(--muted); font-size: 12px; margin: 12px 0 4px; }
 .msg small { margin: 2px 6px 0; }
-.bubble { max-width: min(78%, 460px); padding: 7px 12px; border-radius: 18px; background: var(--soft); }
+.bubble { max-width: 100%; padding: 7px 12px; border-radius: 18px; background: var(--soft); }
 .bubble .text { margin: 0; }
 .mine .bubble { background: var(--accent); color: #fff; }
 .mine .bubble a { color: inherit; text-decoration: underline; }
-.bubble.sending, .bubble.failed { opacity: 0.6; }
+.bubble.sending, .bubble.failed, .dm-img.sending { opacity: 0.6; }
 .dm-compose { position: sticky; bottom: 0; z-index: 4; display: flex; align-items: flex-end; gap: 8px; padding: 10px 16px; background: var(--bg); border-top: 1px solid var(--line); }
 .dm-compose textarea { flex: 1; resize: none; field-sizing: content; min-height: 40px; max-height: 40vh; border-radius: 20px; padding: 9px 14px; }
 .dm-compose .btn { height: 40px; }
@@ -318,6 +331,7 @@ a.searchbox:hover { text-decoration: none; border-color: var(--line); }
   /* on phones the message box sits on the tab bar (these come after the rules above, so they win) */
   .dm-compose { bottom: calc(53px + env(safe-area-inset-bottom)); }
   .col:has(.dm-compose) { padding-bottom: calc(53px + env(safe-area-inset-bottom)); }
+  .dm { min-height: calc(100dvh - 106px - env(safe-area-inset-bottom)); }
 }
 
 /* ---------- settings ---------- */

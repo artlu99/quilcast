@@ -4,8 +4,14 @@
 import { account, getUser, setAccount } from './api.ts'
 
 export type Person = { fid: number; username?: string; displayName?: string; pfp?: { url?: string } }
-export type Msg = { conversationId: string; messageId: string; senderFid: number; serverTimestamp: number; type: string; message: string; isDeleted?: boolean; senderContext?: Person; state?: 'sending' | 'failed' }
-export type Convo = { conversationId: string; name?: string; photoUrl?: string; isGroup: boolean; lastMessage?: Msg; participants?: Person[]; viewerContext: { category?: string; unreadCount?: number; muted?: boolean; counterParty?: Person } }
+export type Msg = {
+  conversationId: string; messageId: string; senderFid: number; serverTimestamp: number; type: string; message: string; isDeleted?: boolean
+  senderContext?: Person; actionTargetUserContext?: Person; state?: 'sending' | 'failed'
+}
+export type Convo = {
+  conversationId: string; name?: string; photoUrl?: string; isGroup: boolean; lastMessage?: Msg; participants?: Person[]; messageTTLDays?: number | 'Infinity'
+  viewerContext: { category?: string; unreadCount?: number; muted?: boolean; counterParty?: Person }
+}
 
 /** One relayed call. A 401 means the token is gone, so it's dropped and asked for again. */
 export async function dm<T = any>(op: string, o: { query?: Record<string, string | number | undefined>; method?: string; body?: unknown } = {}): Promise<T> {
@@ -21,12 +27,12 @@ export async function dm<T = any>(op: string, o: { query?: Record<string, string
 
 // --- state ---
 
+export type Box = 'default' | 'request'
+type List = { items: Convo[] | null; more: string; pages: number }
 export const store = {
-  inbox: null as Convo[] | null, // newest first; muted ones too, the pages filter
-  more: '', // cursor for older conversations
-  requests: null as Convo[] | null,
+  // the inbox (muted ones too, the pages filter) and requests, newest first
+  lists: { default: { items: null, more: '', pages: 0 }, request: { items: null, more: '', pages: 0 } } as Record<Box, List>,
   requestsCount: 0,
-  unreadRequests: false,
   convos: new Map<string, Convo>(),
   chats: new Map<string, { msgs: Msg[]; older: string }>(),
   open: '', // the conversation on screen, which reads what arrives
@@ -37,8 +43,8 @@ export const subscribe = (f: () => void) => (subs.add(f), () => void subs.delete
 let dot: boolean | undefined
 function changed() {
   subs.forEach((f) => f())
-  // the nav dot: unread messages that aren't muted, or a new request
-  const now = store.unreadRequests || !!store.requests?.some(unread) || !!store.inbox?.some((c) => unread(c) && !c.viewerContext.muted)
+  // the nav dot: unread conversations in the inbox that aren't muted (requests are mostly strangers, so they don't count)
+  const now = !!store.lists.default.items?.some((c) => unread(c) && !c.viewerContext.muted)
   if (now !== dot) dispatchEvent(new CustomEvent('dms', { detail: (dot = now) }))
 }
 
@@ -54,23 +60,45 @@ export function merge(a: Msg[], b: Msg[]) {
   return [...have.values()].sort((x, y) => x.serverTimestamp - y.serverTimestamp)
 }
 
-const keep = (cs: Convo[]) => (cs.forEach((c) => store.convos.set(c.conversationId, c)), cs)
-
-/** The inbox's first page (or the next one, with `more`); calls that overlap share one request. */
-let loading: Promise<void> | undefined
-export const loadInbox = (more = false): Promise<void> => (more ? fetchInbox(true) : (loading ||= fetchInbox(false).finally(() => (loading = undefined))))
-async function fetchInbox(more: boolean) {
-  const r = await dm('inbox', { query: { category: 'default', limit: 50, cursor: more ? store.more : undefined } })
-  store.inbox = [...(more ? store.inbox || [] : []), ...keep(r.result.conversations)]
-  store.more = r.next?.cursor || ''
-  store.requestsCount = r.result.requestsCount || 0
-  store.unreadRequests = !!r.result.hasUnreadRequests
-  changed()
+/** A page of conversations added to `list`: new ones only, and a page with nothing new is the end, whatever the cursor says. */
+export function page(list: List, got: Convo[], next: string | undefined, older: boolean) {
+  const old = list.items || []
+  if (older) {
+    const have = new Set(old.map((c) => c.conversationId))
+    const added = got.filter((c) => !have.has(c.conversationId))
+    list.items = [...old, ...added]
+    list.more = added.length ? next || '' : ''
+    list.pages++
+  } else {
+    // the newest page on top; older pages already loaded stay under it, and so does their cursor
+    const ids = new Set(got.map((c) => c.conversationId))
+    list.items = [...got, ...(list.pages > 1 ? old.filter((c) => !ids.has(c.conversationId)) : [])]
+    if (list.pages <= 1) list.more = next || ''
+    list.pages ||= 1
+  }
 }
 
-export async function loadRequests() {
-  store.requests = keep((await dm('inbox', { query: { category: 'request', limit: 50 } })).result.conversations)
+const busy = new Map<string, Promise<void>>()
+/** A list's newest page, or with `older` the next one down; calls that overlap share one request. */
+export function load(box: Box, older = false): Promise<void> {
+  const k = `${box}${older}`
+  if (!busy.has(k)) busy.set(k, fetchPage(box, older).finally(() => busy.delete(k)))
+  return busy.get(k)!
+}
+async function fetchPage(box: Box, older: boolean) {
+  const list = store.lists[box]
+  const r = await dm('inbox', { query: { category: box, limit: 50, cursor: older ? list.more : undefined } })
+  for (const c of r.result.conversations as Convo[]) store.convos.set(c.conversationId, c)
+  page(list, r.result.conversations, r.next?.cursor, older)
+  if (box === 'default') store.requestsCount = r.result.requestsCount || 0
   changed()
+}
+/** Older pages until one brings something `want` keeps, or the list ends: a click always shows something or the end. */
+export async function loadOlder(box: Box, want: (c: Convo) => boolean) {
+  const list = store.lists[box]
+  const count = () => (list.items || []).filter(want).length
+  const before = count()
+  for (let i = 0; i < 10 && list.more && count() === before; i++) await load(box, true)
 }
 
 /** A conversation's latest messages (20 when some are already here, which is all a refresh needs), or earlier ones. */
@@ -106,6 +134,14 @@ export async function lookup(id: string) {
   return c
 }
 
+/** The settings the inbox doesn't carry (auto-delete), read into the conversation we have. */
+export async function details(c: Convo) {
+  const d: Convo = (await dm('conversation', { query: { conversationId: c.conversationId } })).result.conversation
+  c.messageTTLDays = d.messageTTLDays
+  c.participants ||= d.participants
+  changed()
+}
+
 // --- actions ---
 
 export function read(id: string) {
@@ -116,37 +152,38 @@ export function read(id: string) {
   dm('read', { method: 'POST', body: { conversationId: id } }).catch(() => {})
 }
 
-export async function mute(c: Convo, muted: boolean) {
-  c.viewerContext.muted = muted
+// set a field optimistically, and put it back if farcaster.xyz says no
+async function setting<K extends 'muted' | 'messageTTLDays'>(c: Convo, k: K, v: any, op: string, body: object) {
+  const target = k === 'muted' ? c.viewerContext : c
+  const was = (target as any)[k]
+  ;(target as any)[k] = v
   changed()
   try {
-    await dm('mute', { method: 'POST', body: { conversationId: c.conversationId, muted } })
+    await dm(op, { method: 'POST', body: { conversationId: c.conversationId, ...body } })
   } catch (e) {
-    c.viewerContext.muted = !muted
+    ;(target as any)[k] = was
     changed()
     throw e
   }
 }
+export const mute = (c: Convo, muted: boolean) => setting(c, 'muted', muted, 'mute', { muted })
+/** Auto-delete messages after `days` (1, 7, 30 or 365), or never ('Infinity'). */
+export const autoDelete = (c: Convo, days: number | 'Infinity') => setting(c, 'messageTTLDays', days, 'ttl', { ttl: days })
 
-// newest conversation on top of the inbox, and out of requests once it's answered
+// newest conversation on top of the inbox (requests keep their place)
 function bump(c: Convo, m: Msg) {
   c.lastMessage = m
-  if (c.viewerContext.category === 'request') return
-  store.inbox = [c, ...(store.inbox || []).filter((x) => x.conversationId !== c.conversationId)]
+  const list = store.lists.default
+  if (c.viewerContext.category !== 'request' && list.items) list.items = [c, ...list.items.filter((x) => x.conversationId !== c.conversationId)]
 }
 
-/** Send `text`, shown right away and swapped for farcaster.xyz's copy once it's through. */
+/** Send `text`, shown right away as "Sending…" and replaced in place by farcaster.xyz's copy once it's through. */
 export async function send(c: Convo, text: string) {
   const me = account!.fid!
   const id = c.conversationId
   const chat = store.chats.get(id) || { msgs: [], older: '' }
   store.chats.set(id, chat)
   const temp: Msg = { conversationId: id, messageId: crypto.randomUUID(), senderFid: me, serverTimestamp: Date.now(), type: 'text', message: text, state: 'sending' }
-  const settle = (m: Msg) => {
-    // the websocket may have brought farcaster.xyz's copy first
-    chat.msgs = chat.msgs.some((x) => x.messageId === m.messageId && x !== temp) ? chat.msgs.filter((x) => x !== temp) : chat.msgs.map((x) => (x === temp ? m : x))
-    changed()
-  }
   chat.msgs = [...chat.msgs, temp]
   changed()
   try {
@@ -154,17 +191,19 @@ export async function send(c: Convo, text: string) {
     if (c.viewerContext.category && c.viewerContext.category !== 'default') {
       await dm('category', { method: 'POST', body: { conversationId: id, category: 'default' } })
       c.viewerContext.category = 'default'
-      store.requests = store.requests?.filter((x) => x !== c) || null
+      const req = store.lists.request
+      req.items = req.items?.filter((x) => x !== c) || null
       store.requestsCount = Math.max(0, store.requestsCount - 1)
     }
     const to = c.isGroup ? { groupId: id } : { recipientFid: c.viewerContext.counterParty?.fid || c.participants?.find((p) => p.fid !== me)?.fid }
     const r = await dm('send', { method: 'PUT', body: { ...to, message: text } })
-    const sent = { ...temp, messageId: r.result?.messageId || temp.messageId, state: undefined }
-    settle(sent)
-    bump(c, sent)
+    // the websocket may already have swapped in farcaster.xyz's copy; otherwise ours takes its id
+    if (chat.msgs.includes(temp)) chat.msgs = chat.msgs.map((x) => (x === temp ? { ...temp, messageId: r.result?.messageId || temp.messageId, state: undefined } : x))
+    bump(c, chat.msgs.find((x) => x.messageId === r.result?.messageId) || temp)
     changed()
   } catch (e) {
-    settle({ ...temp, state: 'failed' })
+    chat.msgs = chat.msgs.map((x) => (x === temp ? { ...temp, state: 'failed' } : x))
+    changed()
     throw e
   }
 }
@@ -172,18 +211,23 @@ export async function send(c: Convo, text: string) {
 // --- live updates ---
 
 type Event = { messageType: string; payload?: { conversationId?: string; message?: Msg } }
-function handle({ messageType, payload }: Event) {
+export function handle({ messageType, payload }: Event) {
   const id = payload?.conversationId
   if (!id) return
   const c = store.convos.get(id)
   if (messageType === 'refresh-direct-cast-conversation' && payload!.message) {
     const m = payload!.message
+    const mine = m.senderFid === account?.fid
     const chat = store.chats.get(id)
-    if (chat) chat.msgs = merge(chat.msgs, [m])
-    // a conversation we haven't seen (a new one, or a request) comes with the inbox
-    if (!c) return void loadInbox().then(() => store.requests && loadRequests()).catch(() => {})
+    if (chat) {
+      // our own message coming back takes the place of the one still sending, so nothing doubles or jumps
+      const temp = mine && chat.msgs.find((x) => x.state === 'sending' && x.message === m.message)
+      chat.msgs = temp ? chat.msgs.map((x) => (x === temp ? m : x)) : merge(chat.msgs, [m])
+    }
+    // a conversation we haven't seen (a new one, or a request) comes with its list
+    if (!c) return void load('default').then(() => store.lists.request.items && load('request')).catch(() => {})
     bump(c, m)
-    if (m.senderFid !== account?.fid) {
+    if (!mine) {
       // on screen it's read as it arrives; otherwise it counts
       if (store.open === id && document.visibilityState === 'visible') dm('read', { method: 'POST', body: { conversationId: id } }).catch(() => {})
       else c.viewerContext.unreadCount = (c.viewerContext.unreadCount || 0) + 1
@@ -192,7 +236,7 @@ function handle({ messageType, payload }: Event) {
   } else if (messageType === 'direct-cast-read' && c) {
     c.viewerContext.unreadCount = 0
     changed()
-  } else if (messageType === 'refresh-self-direct-casts-inbox') loadInbox().catch(() => {})
+  } else if (messageType === 'refresh-self-direct-casts-inbox') load('default').catch(() => {})
 }
 
 let ws: WebSocket | undefined
@@ -206,13 +250,13 @@ export function start() {
   ws?.close()
   const token = (wsToken = account.dm)
   // the nav dot needs the inbox before anyone opens Messages
-  if (!store.inbox) loadInbox().catch(() => {})
+  if (!store.lists.default.items) load('default').catch(() => {})
   const socket = (ws = new WebSocket('wss://ws.farcaster.xyz/stream'))
   socket.onopen = () => {
     socket.send(JSON.stringify({ messageType: 'dc_authenticate', data: token }))
     wait = 1000
     // back after a drop: catch up on what happened while we weren't listening
-    if (dropped) (dropped = false), loadInbox().catch(() => {}), store.open && loadChat(store.open).catch(() => {})
+    if (dropped) (dropped = false), load('default').catch(() => {}), store.open && loadChat(store.open).catch(() => {})
   }
   socket.onmessage = (e) => {
     if (wsToken !== token) return socket.close()
