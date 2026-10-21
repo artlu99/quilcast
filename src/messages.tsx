@@ -119,7 +119,8 @@ function Inbox() {
       {!shown && !err && <div class="spinner" />}
       {shown?.length === 0 && !list.more && <div class="note">{EMPTY[tab]}</div>}
       {shown?.map((c) => <Row key={c.conversationId} c={c} />)}
-      {busy && <div class="spinner" />}
+      {/* Muted can only be found by looking through the whole inbox, which can take a while */}
+      {busy && (tab === 'muted' ? <div class="note">Looking through your conversations for muted ones… {list.items?.length} checked</div> : <div class="spinner" />)}
       <div ref={end} />
     </>
   )

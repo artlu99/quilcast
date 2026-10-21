@@ -20,7 +20,7 @@ test('merge keeps messages in order, drops repeats, and hands back the same arra
 
 test('older pages add only new conversations, a page with nothing new ends the list, and a refresh keeps older pages', async () => {
   const { page } = await import('./dms.ts')
-  const list = { items: null, more: '', pages: 0 } as any
+  const list = { items: null, more: '', pages: 0, used: new Set() } as any
   const ids = () => list.items.map((c: any) => c.conversationId)
   page(list, [convo('a'), convo('b')], 'p2', false)
   page(list, [convo('b'), convo('c')], 'p3', true)
@@ -28,6 +28,11 @@ test('older pages add only new conversations, a page with nothing new ends the l
   // the same page again (a cursor that doesn't move on) brings nothing new: that's the end
   page(list, [convo('c')], 'p3', true)
   assert.deepEqual([ids(), list.more], [['a', 'b', 'c'], ''])
+  // a cursor that comes round again is the end too, even when its page looks new
+  const loop = { items: null, more: '', pages: 0, used: new Set(['p2']) } as any
+  page(loop, [convo('a')], 'p2', false)
+  page(loop, [convo('z')], 'p2', true)
+  assert.equal(loop.more, '')
   // a refresh puts the newest on top and keeps what older pages loaded
   page(list, [convo('c'), convo('a')], 'p2', false)
   assert.deepEqual([ids(), list.more], [['c', 'a', 'b'], ''])

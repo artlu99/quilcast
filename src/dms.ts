@@ -29,8 +29,9 @@ export async function dm<T = any>(op: string, o: { query?: Record<string, string
 
 // the inbox (muted ones too, the pages filter), what farcaster.xyz says is unread in it, and requests; newest first
 export type Box = 'default' | 'unread' | 'request'
-type List = { items: Convo[] | null; more: string; pages: number }
-const empty = (): List => ({ items: null, more: '', pages: 0 })
+// `used` holds the cursors already asked for: one coming round again means the list has looped, so it's the end
+type List = { items: Convo[] | null; more: string; pages: number; used: Set<string> }
+const empty = (): List => ({ items: null, more: '', pages: 0, used: new Set() })
 export const store = {
   lists: { default: empty(), unread: empty(), request: empty() } as Record<Box, List>,
   requestsCount: 0,
@@ -68,7 +69,7 @@ export function page(list: List, got: Convo[], next: string | undefined, older: 
     const have = new Set(old.map((c) => c.conversationId))
     const added = got.filter((c) => !have.has(c.conversationId))
     list.items = [...old, ...added]
-    list.more = added.length ? next || '' : ''
+    list.more = added.length && next && !list.used.has(next) ? next : ''
     list.pages++
   } else {
     // the newest page on top; older pages already loaded stay under it, and so does their cursor
@@ -88,6 +89,7 @@ export function load(box: Box, older = false): Promise<void> {
 }
 async function fetchPage(box: Box, older: boolean) {
   const list = store.lists[box]
+  if (older) list.used.add(list.more)
   // 100 is the most farcaster.xyz gives at once
   const r = await dm('inbox', { query: { category: box === 'request' ? 'request' : 'default', filter: box === 'unread' ? 'unread' : undefined, limit: 100, cursor: older ? list.more : undefined } })
   // the same conversation in two lists is one object, so a change shows in both
