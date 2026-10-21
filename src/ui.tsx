@@ -16,6 +16,11 @@ export const shell = {
 }
 export const toast = (m: string) => shell.toast(m)
 export const requireAccount = () => (account?.done ? true : (go('/join'), false))
+/** Ask the browser to show notifications. It has to run straight from a click: Firefox drops the prompt
+ *  if anything (a lazy import) is awaited first. */
+export const askPush = () => ('Notification' in window ? Notification.requestPermission().catch(() => 'denied' as const) : Promise.resolve('denied' as const))
+/** Whether this browser already has a push subscription for Quilcast. */
+export const pushOn = async () => !!(await (await navigator.serviceWorker?.getRegistration('/sw.js'))?.pushManager.getSubscription())
 /** Open a mini app (src/miniapp.tsx, loaded on first use). */
 export const launchApp = (m: AppMeta, ctx?: { cast?: Cast; embed?: string }) => requireAccount() && import('./miniapp.tsx').then((x) => x.launch(m, ctx))
 export const launchUrl = (url: string) => requireAccount() && import('./miniapp.tsx').then((x) => x.launchUrl(url))

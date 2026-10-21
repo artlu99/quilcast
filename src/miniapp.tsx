@@ -12,7 +12,7 @@ import { base58, hex } from './fc.ts'
 import { checkWallet, READS, rpcError, SIGNS, signInCheck, siwf, WALLET_READS } from './guard.ts'
 import { castText, LOGO } from './shared.ts'
 import { allowance, approveTx, parseToken, quote, tokenInfo, transferTx, USDC, type Token, type TokenId } from './tokens.ts'
-import { channelOf, fetchCast, handle, Icon, Img, Menu, P, shell, toast, unfurl } from './ui.tsx'
+import { askPush, channelOf, fetchCast, handle, Icon, Img, Menu, P, shell, toast, unfurl } from './ui.tsx'
 import { custodyOf, signEvent } from './write.ts'
 
 const QUILCAST_FID = 3356316
@@ -485,16 +485,16 @@ export const manifestOf = (origin: string): Promise<{ name?: string; iconUrl?: s
   fetch(`/api/manifest?origin=${encodeURIComponent(origin)}`).then((r) => r.json(), () => null)
 const details = (m: AppMeta) => api('/api/notify/token', { inbox: inboxSecret(), origin: new URL(m.url).origin, name: m.name, icon: m.icon }) as Promise<{ token: string; url: string }>
 
-/** Ask the browser for permission to show notifications; call it right from a click. */
-export const askPush = () => ('Notification' in window ? Notification.requestPermission().catch(() => 'denied') : Promise.resolve('denied'))
 /** Pushes to this browser for every app with notifications on (permission asked first, see askPush). */
 export async function enablePush() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error("This browser can't show notifications.")
-  if ((await askPush()) !== 'granted') throw new Error('Notifications are blocked for Quilcast in this browser.')
+  if (Notification.permission !== 'granted' && (await askPush()) !== 'granted') throw new Error('Notifications are blocked for Quilcast in this browser. Allow them in the site settings (the icon left of the address).')
   const reg = await navigator.serviceWorker.register('/sw.js')
   await navigator.serviceWorker.ready
   const { key } = await (await fetch('/api/notify/vapid')).json()
-  const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64(key) }))
+  // a browser without a reachable push service never answers, so this gives up instead of spinning forever
+  const timeout = new Promise<never>((_, no) => setTimeout(() => no(new Error("This browser's push service didn't answer. Try again in a minute.")), 20000))
+  const sub = (await reg.pushManager.getSubscription()) || (await Promise.race([reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64(key) }), timeout]))
   await api('/api/notify/push', { inbox: inboxSecret(), subscription: sub.toJSON() })
 }
 export async function disablePush() {

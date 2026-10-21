@@ -84,10 +84,22 @@ async function drop(req) {
 /** POST /api/notify/push {inbox, subscription}: where this inbox's pushes go (null stops them). */
 async function subscribe(req) {
   const b = await readJson(req, 4000)
-  const box = db.inboxes[hash(b.inbox)]
-  if (!box) throw fail(404, 'no inbox')
+  const id = hash(b.inbox)
+  // push can be turned on before any app has a token, so this may be the inbox's first call
+  if (!db.inboxes[id] && Object.keys(db.inboxes).length >= MAX_TOKENS) throw fail(429, 'too many')
+  const box = (db.inboxes[id] ||= { items: [] })
   if (b.subscription !== null && !validSubscription(b.subscription)) throw fail(400, 'bad subscription')
+  const fresh = b.subscription && box.push?.endpoint !== b.subscription.endpoint
   box.push = b.subscription ? { endpoint: b.subscription.endpoint, keys: { p256dh: b.subscription.keys.p256dh, auth: b.subscription.keys.auth } } : undefined
+  // a new subscription gets one push straight away: the person sees it works, and a push service that refuses us says so now
+  if (fresh) {
+    const status = await push(dir, box.push, { title: 'Quilcast', body: 'Push notifications are on. Mini apps you allow can now reach you here.', url: '/apps' }).catch(() => 0)
+    if (status < 200 || status >= 300) {
+      box.push = undefined
+      persist()
+      throw fail(502, `The browser's push service refused the test notification${status ? ` (${status})` : ''}.`)
+    }
+  }
   persist()
   return { ok: true }
 }

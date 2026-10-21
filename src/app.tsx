@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
 import { castText, n } from './shared.ts'
-import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w } from './ui.tsx'
+import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, UserRow, userPath, w, askPush, pushOn } from './ui.tsx'
 import type { AppMeta } from './miniapp.tsx'
 import './style.css'
 
@@ -213,13 +213,23 @@ const group = (notes: Note[]) => {
 // ponytail: the node returns at most 100 reactions or quotes per cast and can't page them, so lists stop there
 const quotesOf = async (hash: string, limit = 100) => (await get('/v2/farcaster/cast/quotes', { identifier: hash, type: 'hash', limit })).casts as Cast[]
 
-// Hypersnap's notifications leave quotes out, so they're looked up per cast
-// ponytail: only quotes of our 25 newest casts show up; quote notifications on the node would cover the rest
-async function quotesOfMine(): Promise<Note[]> {
-  const casts = (await get('/v2/farcaster/feed/user/casts', { fid: account!.fid, limit: 25 })).casts as Cast[]
-  const lists = await Promise.all(casts.map((c) => quotesOf(c.hash, 25).catch(() => [])))
-  const quotes = new Map(lists.flat().filter((q) => q.author.fid !== account!.fid).map((q) => [q.hash, q]))
-  return [...quotes.values()].map((q) => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp }))
+// Hypersnap's notifications leave quotes and recasts out, so they're looked up per cast: quotes for each, recasts only
+// for casts that have some (one request each)
+// ponytail: only our 25 newest casts are covered; quote and recast notifications on the node would cover the rest
+async function quotesAndRecasts(): Promise<Note[]> {
+  const me = account!.fid
+  const casts = (await get('/v2/farcaster/feed/user/casts', { fid: me, limit: 25 })).casts as Cast[]
+  const recastsOf = (c: Cast) =>
+    get('/v2/farcaster/reactions/cast', { hash: c.hash, types: 'recasts', limit: 100 }).then(
+      (r) => (r.reactions as { user: User; reaction_timestamp: string }[]).filter((x) => x.user.fid !== me).map((x): Note => ({ type: 'recasts', cast: c, user: x.user, timestamp: x.reaction_timestamp })),
+      () => [],
+    )
+  const [lists, recasts] = await Promise.all([
+    Promise.all(casts.map((c) => quotesOf(c.hash, 25).catch(() => []))),
+    Promise.all(casts.filter((c) => c.reactions.recasts_count > 0).map(recastsOf)),
+  ])
+  const quotes = new Map(lists.flat().filter((q) => q.author.fid !== me).map((q) => [q.hash, q]))
+  return [...[...quotes.values()].map((q): Note => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp })), ...recasts.flat()]
 }
 
 type AppNote = { id: string; app: string; name: string; icon?: string; notificationId: string; title: string; body: string; targetUrl: string; at: number }
@@ -253,7 +263,7 @@ function Notifications() {
   const [tab, setTab] = useState<'all' | 'replies' | 'apps'>('all')
   const [round, reload] = useReload()
   // one lookup per visit or reload: switching tabs reuses it
-  const quotes = useMemo(() => (account?.done ? quotesOfMine().catch(() => []) : Promise.resolve([])), [round])
+  const quotes = useMemo(() => (account?.done ? quotesAndRecasts().catch(() => []) : Promise.resolve([])), [round])
   const held = useRef<Note[]>([])
   useEffect(() => {
     // opening the page marks everything up to now as seen
@@ -277,7 +287,7 @@ function Notifications() {
           const edge = next ? notes[notes.length - 1].timestamp : ''
           const seen = new Set(notes.map((n) => n.cast?.hash))
           held.current = qs.filter((q) => q.timestamp < edge)
-          const items = [...notes, ...qs.filter((q) => q.timestamp >= edge && !seen.has(q.cast!.hash))]
+          const items = [...notes, ...qs.filter((q) => q.timestamp >= edge && !(q.type === 'quote' && seen.has(q.cast!.hash)))]
             .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
             .filter((n) => n.user && (tab === 'all' || (n.cast && !ACT(n.type))))
           await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
@@ -531,9 +541,11 @@ function Apps() {
   const [list, setList] = useState(() => read<AppMeta[]>('quilcast:apps', []))
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState('')
-  const [push, setPush] = useState(() => 'Notification' in window && Notification.permission === 'granted')
+  const [push, setPush] = useState(false)
+  const [pushErr, setPushErr] = useState('')
   const [, force] = useState(0)
   const m = () => import('./miniapp.tsx')
+  useEffect(() => void pushOn().then(setPush, () => {}), [])
   useEffect(() => {
     // a tapped push notification lands here as ?n=<id>
     const n = new URLSearchParams(location.search).get('n')
@@ -558,7 +570,7 @@ function Apps() {
   }
   const bell = (a: AppMeta) => {
     // the browser only asks for permission from a click, so that comes first
-    const asked = !on(a) && m().then((x) => x.askPush())
+    const asked = !on(a) && askPush()
     run(a.url, async () => {
       const x = await m()
       await x.setNotify(a, !on(a), undefined, setBusy)
@@ -572,14 +584,19 @@ function Apps() {
       save('quilcast:apps', next)
       setList(next)
     })
-  const togglePush = () => {
-    const asked = !push && m().then((x) => x.askPush())
-    run('push', async () => {
+  const togglePush = async () => {
+    const asked = !push && askPush()
+    setBusy('push')
+    setPushErr('')
+    try {
       const x = await m()
       if (push) await x.disablePush(), setPush(false)
       else if ((await asked) === 'granted') await x.enablePush(), setPush(true)
-      else throw new Error('Notifications are blocked for Quilcast in this browser.')
-    })
+      else throw new Error('Notifications are blocked for Quilcast in this browser. Allow them in the site settings (the icon left of the address).')
+    } catch (e: any) {
+      setPushErr(e.message)
+    }
+    setBusy('')
   }
   const openTyped = () => url.trim() && launchUrl(/^https?:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`)
   return (
@@ -606,7 +623,8 @@ function Apps() {
         <Discover />
         {account?.done && (
           <section>
-            <div class="setting"><span>Push notifications on this device</span><button class="btn ghost small" disabled={busy === 'push'} onClick={togglePush}>{push ? 'Turn off' : 'Turn on'}</button></div>
+            <div class="setting"><span>Push notifications on this device</span><button class="btn ghost small" disabled={busy === 'push'} onClick={togglePush}>{busy === 'push' ? 'Working…' : push ? 'Turn off' : 'Turn on'}</button></div>
+            {pushErr && <p class="hint warn">{pushErr}</p>}
             <p class="hint">Turning notifications on for an app the first time adds a notification key to your account on Optimism, which costs a cent or less in gas. Apps check that key, and signing out removes it.</p>
           </section>
         )}
