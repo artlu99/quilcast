@@ -1,4 +1,4 @@
-// ogre mode: five taps in a row on the big pfp on /u/borodutch turn the app into a swamp (the looks live in style.css under [data-ogre])
+// ogre mode: five taps in a row on the big pfp on /u/borodutch turn the app into a swamp, forever — there is no way back (the looks live in style.css under [data-ogre])
 export const OGRE_FID = 1356
 const KEY = 'quilcast:ogre'
 const root = document.documentElement
@@ -17,22 +17,21 @@ const ROAR = 'https://media.tenor.com/FYo0d-3JCz8AAAAx/roar-breathe.webp'
 export function ogreTap(el: Element) {
   clearTimeout(timer)
   const left = 5 - ++taps
-  hit(el, left ? String(left) : on() ? 'ogre mode off' : 'OGRE MODE!')
+  hit(el, left ? String(left) : on() ? 'forever' : 'OGRE MODE!')
   // fetch the roar early so it's ready on the last tap
   if (left === 2 && !on()) new Image().src = ROAR
   if (!left) {
     taps = 0
-    set(!on())
-    if (on()) {
-      const img = document.createElement('img')
-      img.className = 'roar'
-      img.src = ROAR
-      img.alt = ''
-      img.onanimationend = () => img.remove()
-      document.body.append(img)
-    }
+    if (on()) return // no off switch: ogre mode is forever
+    set(true)
+    const img = document.createElement('img')
+    img.className = 'roar'
+    img.src = ROAR
+    img.alt = ''
+    img.onanimationend = () => img.remove()
+    document.body.append(img)
     try {
-      localStorage.setItem(KEY, on() ? '1' : '')
+      localStorage.setItem(KEY, '1')
     } catch {}
     return
   }
