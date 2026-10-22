@@ -1,9 +1,11 @@
 FROM node:24.22.1-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# the version bump in package.json reruns this every release; the cache mount keeps it offline
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline --no-audit --no-fund
 COPY . .
 # the server tests start the real server, which serves dist/, so build first
+# browser-only packages (viem, hls.js, preact…) are devDependencies, so the runtime keeps just what server/ imports
 RUN npm run build && npm test && npm prune --omit=dev
 
 FROM node:24.22.1-slim

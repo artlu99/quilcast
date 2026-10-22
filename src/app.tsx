@@ -220,24 +220,20 @@ const group = (notes: Note[]) => {
 // ponytail: the node returns at most 100 reactions or quotes per cast and can't page them, so lists stop there
 const quotesOf = async (hash: string, limit = 100) => (await get('/v2/farcaster/cast/quotes', { identifier: hash, type: 'hash', limit })).casts as Cast[]
 
-// Hypersnap's notifications leave quotes and recasts out, so they're looked up per cast: quotes for each, recasts only
-// for casts that have some (one request each)
-// ponytail: covers our 25 newest casts plus top-level ones among the 100 newest (announcements get quoted days later);
-// older ones need quote and recast notifications on the node, since lookups are one request per cast
-async function quotesAndRecasts(): Promise<Note[]> {
+// Hypersnap's notifications leave recasts out, so they're looked up for our casts that have some (one request each)
+// ponytail: only our 25 newest casts are covered; recast notifications on the node would cover the rest
+async function recastNotes(): Promise<Note[]> {
   const me = account!.fid
-  const casts = ((await get('/v2/farcaster/feed/user/casts', { fid: me, limit: 100 })).casts as Cast[]).filter((c, i) => i < 25 || !c.parent_hash)
-  const recastsOf = (c: Cast) =>
-    get('/v2/farcaster/reactions/cast', { hash: c.hash, types: 'recasts', limit: 100 }).then(
-      (r) => (r.reactions as { user: User; reaction_timestamp: string }[]).filter((x) => x.user.fid !== me).map((x): Note => ({ type: 'recasts', cast: c, user: x.user, timestamp: x.reaction_timestamp })),
-      () => [],
-    )
-  const [lists, recasts] = await Promise.all([
-    Promise.all(casts.map((c) => quotesOf(c.hash, 25).catch(() => []))),
-    Promise.all(casts.filter((c) => c.reactions.recasts_count > 0).map(recastsOf)),
-  ])
-  const quotes = new Map(lists.flat().filter((q) => q.author.fid !== me).map((q) => [q.hash, q]))
-  return [...[...quotes.values()].map((q): Note => ({ type: 'quote', cast: q, user: q.author, timestamp: q.timestamp })), ...recasts.flat()]
+  const casts = (await get('/v2/farcaster/feed/user/casts', { fid: me, limit: 25 })).casts as Cast[]
+  const lists = await Promise.all(
+    casts.filter((c) => c.reactions.recasts_count > 0).map((c) =>
+      get('/v2/farcaster/reactions/cast', { hash: c.hash, types: 'recasts', limit: 100 }).then(
+        (r) => (r.reactions as { user: User; reaction_timestamp: string }[]).filter((x) => x.user.fid !== me).map((x): Note => ({ type: 'recasts', cast: c, user: x.user, timestamp: x.reaction_timestamp })),
+        () => [],
+      ),
+    ),
+  )
+  return lists.flat()
 }
 
 type AppNote = { id: string; app: string; name: string; icon?: string; notificationId: string; title: string; body: string; targetUrl: string; at: number }
@@ -271,7 +267,7 @@ function Notifications() {
   const [tab, setTab] = useState<'all' | 'replies' | 'apps'>('all')
   const [round, reload] = useReload()
   // one lookup per visit or reload: switching tabs reuses it
-  const quotes = useMemo(() => (account?.done ? quotesAndRecasts().catch(() => []) : Promise.resolve([])), [round])
+  const extra = useMemo(() => (account?.done ? recastNotes().catch(() => []) : Promise.resolve([])), [round])
   const held = useRef<Note[]>([])
   useEffect(() => {
     // opening the page marks everything up to now as seen
@@ -288,14 +284,13 @@ function Notifications() {
         id={(n) => `${n.type}:${n.cast?.hash}:${n.user.fid}:${n.timestamp}`}
         row={(ns) => group(ns).map((g) => <NoteRow key={g.key} g={g} />)}
         load={async (cursor) => {
-          const [r, qs] = await Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor }), cursor ? held.current : quotes])
+          const [r, qs] = await Promise.all([get('/v2/farcaster/notifications', { fid: account!.fid, limit: 50, cursor }), cursor ? held.current : extra])
           const notes = r.notifications as Note[]
           const next = notes.length ? r.next?.cursor || null : null
-          // quotes slot in by time; ones older than this page wait for a later one
+          // recasts slot in by time; ones older than this page wait for a later one
           const edge = next ? notes[notes.length - 1].timestamp : ''
-          const seen = new Set(notes.map((n) => n.cast?.hash))
           held.current = qs.filter((q) => q.timestamp < edge)
-          const items = [...notes, ...qs.filter((q) => q.timestamp >= edge && !(q.type === 'quote' && seen.has(q.cast!.hash)))]
+          const items = [...notes, ...qs.filter((q) => q.timestamp >= edge)]
             .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
             .filter((n) => n.user && (tab === 'all' || (n.cast && !ACT(n.type))))
           await hydrateParents(items.flatMap((n) => (n.cast ? [n.cast] : [])))
