@@ -10,15 +10,27 @@ try {
 
 let taps = 0
 let timer = 0
+// Shrek roaring, from Tenor (credits in public/shrek/credits.html)
+const ROAR = 'https://media.tenor.com/FYo0d-3JCz8AAAAx/roar-breathe.webp'
 
 /** Count a tap on the pfp. Taps more than half a second apart start over. */
 export function ogreTap(el: Element) {
   clearTimeout(timer)
   const left = 5 - ++taps
   hit(el, left ? String(left) : on() ? 'ogre mode off' : 'OGRE MODE!')
+  // fetch the roar early so it's ready on the last tap
+  if (left === 2 && !on()) new Image().src = ROAR
   if (!left) {
     taps = 0
     set(!on())
+    if (on()) {
+      const img = document.createElement('img')
+      img.className = 'roar'
+      img.src = ROAR
+      img.alt = ''
+      img.onanimationend = () => img.remove()
+      document.body.append(img)
+    }
     try {
       localStorage.setItem(KEY, on() ? '1' : '')
     } catch {}

@@ -558,20 +558,30 @@ small.warn { color: var(--warn); }
   --like: light-dark(#5b8c00, #a4d13a);
   --recast: light-dark(#8b5a2b, #c99358);
 }
-/* Shrek behind everything, as the logo and the like button, and peeking from the corner (photos: public/shrek/credits.html) */
+/* Shrek GIFs from Tenor (hotlinked, listed in public/shrek/credits.html): the face as the logo, like button and
+   background, a dancing Shrek in the corner, fairy Shrek in the right column */
 .ogre-only { display: none; }
 :root[data-ogre] .ogre-only { display: block; }
-:root[data-ogre] body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url(/shrek/face.jpg) 0 0 / 96px; opacity: 0.06; }
-:root[data-ogre] body::after {
-  content: ''; position: fixed; z-index: 5; right: 12px; bottom: -36px; width: 110px; height: 199px; pointer-events: none;
-  background: url(/shrek/happy.jpg) top / cover; border-radius: 16px 16px 0 0; box-shadow: 0 6px 24px rgb(0 0 0 / 0.35); transform: rotate(-6deg);
-  animation: peek 4s ease-in-out infinite;
+:root[data-ogre] {
+  --shrek-face: url(https://media.tenor.com/KsR09gs0FDoAAAAx/shrekerutuf-transparentshrek.webp);
+  --shrek-dance: url(https://media.tenor.com/qcv-b7FwOSkAAAA1/shrek-dancing.webp);
+  --shrek-fairy: url(https://media.tenor.com/z_BAugpQD-8AAAA1/shrek-shrek-meme.webp);
 }
-@keyframes peek { 50% { transform: rotate(-3deg) translateY(-10px); } }
+/* the face sits on white, so every use crops it to a circle (the pattern through a tiled mask) */
+:root[data-ogre] body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.08;
+  background: var(--shrek-face) 0 0 / 96px 96px; mask: radial-gradient(circle, #000 36px, transparent 37px) 0 0 / 96px 96px;
+}
+:root[data-ogre] body::after {
+  content: ''; position: fixed; z-index: 5; right: 12px; bottom: 12px; width: 150px; height: 140px; pointer-events: none;
+  background: var(--shrek-dance) center / cover; border-radius: 16px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.35); transform: rotate(-4deg);
+}
 /* phones: the cast button owns the bottom-right corner and the tab bar the bottom edge */
-@media (max-width: 699px) { :root[data-ogre] body::after { right: auto; left: 10px; bottom: calc(40px + env(safe-area-inset-bottom)); width: 70px; height: 127px; } }
+@media (max-width: 699px) { :root[data-ogre] body::after { right: auto; left: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); width: 96px; height: 90px; } }
 :root[data-ogre] .brand svg, :root[data-ogre] .act.lk svg, :root[data-ogre] .note-icon.lk svg { display: none; }
-:root[data-ogre] .brand::before, :root[data-ogre] .act.lk::before, :root[data-ogre] .note-icon.lk::before { content: ''; flex: none; width: 30px; height: 30px; border-radius: 99px; background: url(/shrek/face.jpg) center / cover; }
+:root[data-ogre] .brand::before, :root[data-ogre] .act.lk::before, :root[data-ogre] .note-icon.lk::before, :root[data-ogre] .spinner {
+  content: ''; flex: none; width: 30px; height: 30px; border: 0; border-radius: 99px; background: #fff var(--shrek-face) center / 125%;
+}
 /* the name becomes the Shrek wordmark (+ "cast"), tinted with the swamp green */
 :root[data-ogre] .brand > span { font-size: 0; display: flex; align-items: center; gap: 2px; }
 :root[data-ogre] .brand > span::before { content: ''; width: 76px; height: 22px; background: var(--accent); mask: url(/shrek/logo.svg) center / contain no-repeat; }
@@ -579,9 +589,19 @@ small.warn { color: var(--warn); }
 :root[data-ogre] .act.lk::before { width: 20px; height: 20px; filter: grayscale(1) opacity(0.6); }
 :root[data-ogre] .act.lk.on::before { filter: none; animation: pop 0.25s ease; }
 :root[data-ogre] .note-icon.lk::before { width: 24px; height: 24px; }
-:root[data-ogre] .spinner { border: 0; border-radius: 99px; background: url(/shrek/face.jpg) center / cover; width: 32px; height: 32px; }
 :root[data-ogre] .spinner.small { width: 22px; height: 22px; margin: 0; }
-:root[data-ogre] .extra::after { content: ''; flex: none; height: 300px; border-radius: 16px; border: 1px solid var(--line); background: url(/shrek/tussauds.jpg) center 20% / cover; }
+:root[data-ogre] .extra::after { content: ''; flex: none; height: 330px; border-radius: 16px; border: 1px solid var(--line); background: var(--shrek-fairy) center / cover; }
+/* the roar that plays when ogre mode turns on (src/ogre.ts) */
+.roar {
+  position: fixed; z-index: 100; left: 50%; top: 50%; width: min(80vw, 472px); border-radius: 20px; pointer-events: none;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.5); animation: roar 2.2s ease forwards;
+}
+@keyframes roar {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3) rotate(-8deg); }
+  12% { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(2deg); }
+  20%, 80% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.15); }
+}
 /* everyone gets ogre ears */
 :root[data-ogre] .avatar { overflow: visible; position: relative; }
 :root[data-ogre] .avatar img { border-radius: inherit; }

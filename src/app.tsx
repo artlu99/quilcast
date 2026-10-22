@@ -865,7 +865,7 @@ function App() {
           <b>About Quilcast</b>
           <p>A small, open Farcaster client that reads from and posts to Quilibrium's Hypersnap network, with your keys kept in your browser.</p>
           <p class="foot"><Version /></p>
-          <p class="foot ogre-only"><a href="/shrek/credits.html" target="_blank">Shrek photo credits</a></p>
+          <p class="foot ogre-only"><a href="/shrek/credits.html" target="_blank">Shrek credits</a></p>
         </div>
       </aside>
       <nav class="tabbar" aria-label="Main">
