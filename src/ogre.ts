@@ -28,7 +28,8 @@ export function ogreTap(el: Element) {
       img.className = 'roar'
       img.src = ROAR
       img.alt = ''
-      img.onanimationend = () => img.remove()
+      // on a timer, not animationend: with reduced motion the animation never runs (style.css), so it would never end
+      setTimeout(() => img.remove(), 2200)
       document.body.append(img)
     }
     try {
@@ -47,6 +48,6 @@ function hit(el: Element, text: string) {
   s.textContent = text
   s.style.left = `${r.left + r.width / 2 + Math.random() * 24 - 12}px`
   s.style.top = `${r.top}px`
-  s.onanimationend = () => s.remove()
+  setTimeout(() => s.remove(), 900)
   document.body.append(s)
 }
