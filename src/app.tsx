@@ -2,6 +2,7 @@ import { render, type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { account, accounts, findUsers, get, getUser, go, hydrateParents, idOf, isFollowing, loadMine, loadUsers, myUser, posting, read, save, saveSettings, setAccount, settings, switchAccount, users, USER_DATA, type Cast, type User } from './api.ts'
 import { Composer } from './compose.tsx'
+import { OGRE_FID, ogreTap } from './ogre.ts'
 import { castText, n, sized } from './shared.ts'
 import { ago, AppIcon, Avatar, CastCard, fetchCast, handle, Header, Icon, Img, launchApp, launchUrl, Lightbox, Logo, Menu, nameOf, P, requireAccount, RichText, shell, Tabs, toast, thumbOf, urlsOf, UserRow, userPath, w, askPush, pushOn } from './ui.tsx'
 import type { AppMeta } from './miniapp.tsx'
@@ -445,7 +446,7 @@ function Profile({ id }: { id: string }) {
         <>
           <section class="profile">
             <div class="row-top">
-              <Avatar u={u} size={72} link={false} />
+              <Avatar u={u} size={72} link={false} onClick={u.fid === OGRE_FID ? (e) => ogreTap(e.currentTarget as Element) : undefined} />
               {self ? <a class="btn ghost small" href="/settings">Edit profile</a> : (
                 <span class="btns">
                   {/* a 1:1 conversation's id is both FIDs, sorted (as strings, like farcaster.xyz does) */}
@@ -864,6 +865,7 @@ function App() {
           <b>About Quilcast</b>
           <p>A small, open Farcaster client that reads from and posts to Quilibrium's Hypersnap network, with your keys kept in your browser.</p>
           <p class="foot"><Version /></p>
+          <p class="foot ogre-only"><a href="/shrek/credits.html" target="_blank">Shrek photo credits</a></p>
         </div>
       </aside>
       <nav class="tabbar" aria-label="Main">

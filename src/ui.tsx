@@ -3,7 +3,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import { account, back, get, go, LINK_RE, mine, mineVersion, posting, safeUrl, toUrl, users, type Cast, type User } from './api.ts'
 import { castText, isImg, isVid, LOGO, n, sized, X_LOGO } from './shared.ts'
 import type { AppMeta } from './miniapp.tsx'
-import { OGRE_FID, ogreTap } from './ogre.ts'
 
 // keys and crypto load only when someone signs in or writes
 export const w = () => import('./write.ts')
@@ -122,19 +121,11 @@ export function Menu({ close, class: cls, children }: { close: () => void; class
   return <div ref={ref} class={`menu ${cls || ''}`} role="menu">{children}</div>
 }
 
-export const Avatar = ({ u, size = 40, link = true }: { u: User; size?: number; link?: boolean }) => {
+export const Avatar = ({ u, size = 40, link = true, onClick }: { u: User; size?: number; link?: boolean; onClick?: (e: MouseEvent) => void }) => {
   const style = { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.42)}px` }
   const pfp = safeUrl(u.pfp_url)
   const inner = pfp ? <Img src={sized(pfp, 'anim=false,w=144')} /> : <span>{[...(u.display_name || u.username || '?')][0]}</span>
-  // @borodutch's pfp counts taps for ogre mode; as a link it opens the profile only after a lone tap
-  const ogre = u.fid === OGRE_FID
-  const tap = (e: MouseEvent) => {
-    if (link) stop(e)
-    if (!ogre || e.metaKey || e.ctrlKey || e.shiftKey) return
-    if (link) e.preventDefault()
-    ogreTap(e.currentTarget as Element, link ? () => go(userPath(u)) : undefined)
-  }
-  return link ? <a class="avatar" href={userPath(u)} style={style} onClick={tap} aria-label={nameOf(u)}>{inner}</a> : <span class="avatar" style={style} onClick={ogre ? tap : undefined}>{inner}</span>
+  return link ? <a class="avatar" href={userPath(u)} style={style} onClick={stop} aria-label={nameOf(u)}>{inner}</a> : <span class="avatar" style={style} onClick={onClick}>{inner}</span>
 }
 
 // links, @mentions and /channels inside cast text

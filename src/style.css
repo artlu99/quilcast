@@ -558,15 +558,30 @@ small.warn { color: var(--warn); }
   --like: light-dark(#5b8c00, #a4d13a);
   --recast: light-dark(#8b5a2b, #c99358);
 }
-/* ogres behind everything, the logo, and the like button */
-:root[data-ogre] body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url(/ogre.svg) 0 0 / 72px; opacity: 0.04; }
+/* Shrek behind everything, as the logo and the like button, and peeking from the corner (photos: public/shrek/credits.html) */
+.ogre-only { display: none; }
+:root[data-ogre] .ogre-only { display: block; }
+:root[data-ogre] body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url(/shrek/face.jpg) 0 0 / 96px; opacity: 0.06; }
+:root[data-ogre] body::after {
+  content: ''; position: fixed; z-index: 5; right: 12px; bottom: -36px; width: 110px; height: 199px; pointer-events: none;
+  background: url(/shrek/happy.jpg) top / cover; border-radius: 16px 16px 0 0; box-shadow: 0 6px 24px rgb(0 0 0 / 0.35); transform: rotate(-6deg);
+  animation: peek 4s ease-in-out infinite;
+}
+@keyframes peek { 50% { transform: rotate(-3deg) translateY(-10px); } }
+/* phones: the cast button owns the bottom-right corner and the tab bar the bottom edge */
+@media (max-width: 699px) { :root[data-ogre] body::after { right: auto; left: 10px; bottom: calc(40px + env(safe-area-inset-bottom)); width: 70px; height: 127px; } }
 :root[data-ogre] .brand svg, :root[data-ogre] .act.lk svg, :root[data-ogre] .note-icon.lk svg { display: none; }
-:root[data-ogre] .brand::before, :root[data-ogre] .act.lk::before, :root[data-ogre] .note-icon.lk::before { content: ''; flex: none; width: 30px; height: 30px; background: url(/ogre.svg) center / contain no-repeat; }
-:root[data-ogre] .brand > span { font-size: 0; }
-:root[data-ogre] .brand > span::after { content: 'Ogrecast'; font-size: 19px; }
+:root[data-ogre] .brand::before, :root[data-ogre] .act.lk::before, :root[data-ogre] .note-icon.lk::before { content: ''; flex: none; width: 30px; height: 30px; border-radius: 99px; background: url(/shrek/face.jpg) center / cover; }
+/* the name becomes the Shrek wordmark (+ "cast"), tinted with the swamp green */
+:root[data-ogre] .brand > span { font-size: 0; display: flex; align-items: center; gap: 2px; }
+:root[data-ogre] .brand > span::before { content: ''; width: 76px; height: 22px; background: var(--accent); mask: url(/shrek/logo.svg) center / contain no-repeat; }
+:root[data-ogre] .brand > span::after { content: 'cast'; font-size: 19px; }
 :root[data-ogre] .act.lk::before { width: 20px; height: 20px; filter: grayscale(1) opacity(0.6); }
 :root[data-ogre] .act.lk.on::before { filter: none; animation: pop 0.25s ease; }
 :root[data-ogre] .note-icon.lk::before { width: 24px; height: 24px; }
+:root[data-ogre] .spinner { border: 0; border-radius: 99px; background: url(/shrek/face.jpg) center / cover; width: 32px; height: 32px; }
+:root[data-ogre] .spinner.small { width: 22px; height: 22px; margin: 0; }
+:root[data-ogre] .extra::after { content: ''; flex: none; height: 300px; border-radius: 16px; border: 1px solid var(--line); background: url(/shrek/tussauds.jpg) center 20% / cover; }
 /* everyone gets ogre ears */
 :root[data-ogre] .avatar { overflow: visible; position: relative; }
 :root[data-ogre] .avatar img { border-radius: inherit; }
