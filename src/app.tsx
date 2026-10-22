@@ -222,10 +222,11 @@ const quotesOf = async (hash: string, limit = 100) => (await get('/v2/farcaster/
 
 // Hypersnap's notifications leave quotes and recasts out, so they're looked up per cast: quotes for each, recasts only
 // for casts that have some (one request each)
-// ponytail: only our 25 newest casts are covered; quote and recast notifications on the node would cover the rest
+// ponytail: covers our 25 newest casts plus top-level ones among the 100 newest (announcements get quoted days later);
+// older ones need quote and recast notifications on the node, since lookups are one request per cast
 async function quotesAndRecasts(): Promise<Note[]> {
   const me = account!.fid
-  const casts = (await get('/v2/farcaster/feed/user/casts', { fid: me, limit: 25 })).casts as Cast[]
+  const casts = ((await get('/v2/farcaster/feed/user/casts', { fid: me, limit: 100 })).casts as Cast[]).filter((c, i) => i < 25 || !c.parent_hash)
   const recastsOf = (c: Cast) =>
     get('/v2/farcaster/reactions/cast', { hash: c.hash, types: 'recasts', limit: 100 }).then(
       (r) => (r.reactions as { user: User; reaction_timestamp: string }[]).filter((x) => x.user.fid !== me).map((x): Note => ({ type: 'recasts', cast: c, user: x.user, timestamp: x.reaction_timestamp })),
