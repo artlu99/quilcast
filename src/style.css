@@ -533,3 +533,46 @@ small.warn { color: var(--warn); }
   .part-x:hover { color: var(--ink); }
   .mentions button:hover { background: var(--soft); }
 }
+
+/* ---------- ogre mode (src/ogre.ts) ---------- */
+.hit {
+  position: fixed; z-index: 99; pointer-events: none; white-space: nowrap; transform: translate(-50%, -100%);
+  font: 900 22px/1 ui-rounded, system-ui, sans-serif; color: #ffd400; -webkit-text-stroke: 1px #3a2a00; text-shadow: 0 2px 0 #3a2a00;
+  animation: hit 0.9s ease-out forwards;
+}
+@keyframes hit {
+  0% { opacity: 0; transform: translate(-50%, -60%) scale(0.6); }
+  15% { opacity: 1; transform: translate(-50%, -110%) scale(1.25); }
+  100% { opacity: 0; transform: translate(-50%, -320%) scale(1); }
+}
+:root[data-ogre] {
+  --bg: light-dark(#eef3d6, #10160a);
+  --card: light-dark(#f6f9e6, #172010);
+  --ink: light-dark(#1f2a0e, #e4eecb);
+  --muted: light-dark(#5f6b45, #98a67a);
+  --line: light-dark(#d3ddae, #2a3617);
+  --soft: light-dark(#e2eac0, #1f2913);
+  --hover: light-dark(rgb(79 125 0 / 0.06), rgb(154 205 50 / 0.06));
+  --accent: light-dark(#4f7d00, #7cb518);
+  --accent-soft: light-dark(#e0edbd, #24340f);
+  --like: light-dark(#5b8c00, #a4d13a);
+  --recast: light-dark(#8b5a2b, #c99358);
+}
+/* ogres behind everything, the logo, and the like button */
+:root[data-ogre] body::before { content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none; background: url(/ogre.svg) 0 0 / 72px; opacity: 0.04; }
+:root[data-ogre] .brand svg, :root[data-ogre] .act.lk svg, :root[data-ogre] .note-icon.lk svg { display: none; }
+:root[data-ogre] .brand::before, :root[data-ogre] .act.lk::before, :root[data-ogre] .note-icon.lk::before { content: ''; flex: none; width: 30px; height: 30px; background: url(/ogre.svg) center / contain no-repeat; }
+:root[data-ogre] .brand > span { font-size: 0; }
+:root[data-ogre] .brand > span::after { content: 'Ogrecast'; font-size: 19px; }
+:root[data-ogre] .act.lk::before { width: 20px; height: 20px; filter: grayscale(1) opacity(0.6); }
+:root[data-ogre] .act.lk.on::before { filter: none; animation: pop 0.25s ease; }
+:root[data-ogre] .note-icon.lk::before { width: 24px; height: 24px; }
+/* everyone gets ogre ears */
+:root[data-ogre] .avatar { overflow: visible; position: relative; }
+:root[data-ogre] .avatar img { border-radius: inherit; }
+:root[data-ogre] .avatar::before, :root[data-ogre] .avatar::after {
+  content: ''; position: absolute; top: 16%; width: 26%; height: 16%;
+  background: #8db600; border: 1.5px solid #4f6b00; border-radius: 30% 60% 60% 30% / 50%;
+}
+:root[data-ogre] .avatar::before { left: -18%; transform: rotate(30deg); }
+:root[data-ogre] .avatar::after { right: -18%; transform: scaleX(-1) rotate(30deg); }
